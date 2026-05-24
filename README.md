@@ -1,24 +1,31 @@
 # Marginalia
 
+> [!WARNING]
+> Marginalia currently depends on Neovim's internal `_on_conceal_line`
+> decoration-provider hook to make whole-line conceal behave like window-local
+> viewport state. This hook is not a stable public API and may change or break
+> across Neovim versions. Treat the plugin as experimental until Neovim exposes
+> a stable per-window line-conceal primitive.
+
 Context-preserving Neovim editing experiments built around hiding irrelevant
 lines instead of mirroring context into a floating overlay.
 
 ## Status
 
-Early development. The current MVP selects Tree-sitter context frames, plans
-protected/hidden rows, and applies Neovim `conceal_lines` extmarks in attached
-windows.
+Early development. The current MVP selects Tree-sitter context frames, projects
+visible rows plus conceal ranges, and lazily materializes Neovim
+`conceal_lines` extmarks through a decoration provider while attached windows
+redraw.
 
 ## Current API
 
 - `require('marginalia').setup(opts)` normalizes plugin configuration.
-- `require('marginalia').get_context(opts)` returns current tree-sitter context frames when a parser is available.
-- `require('marginalia').plan_hidden_ranges(opts)` computes protected and hidden rows without changing the editor.
 - `require('marginalia').enable()`, `disable()`, `toggle()`, and `refresh()` manage the current window.
-- `:MarginaliaEnable`, `:MarginaliaDisable`, `:MarginaliaToggle`, and `:MarginaliaRefresh` manage the current window.
+- `require('marginalia').debug_snapshot()` returns context, viewport, render, and transaction state for inspection.
+- `:MarginaliaEnable`, `:MarginaliaDisable`, `:MarginaliaToggle`, `:MarginaliaRefresh`, and `:MarginaliaDebug` manage or inspect the current window.
 
 The default integration uses a context-focus scope above the cursor. It keeps
-ancestor rows, the cursor row, and rows protected by `scrolloff`, then conceals
+ancestor rows, the cursor row, and rows required by `scrolloff`, then conceals
 the planned non-context rows between them.
 
 Cursor movement is part of the rendering contract. Adjacent linewise movement
@@ -28,9 +35,13 @@ the cursor by one physical screen row, even when the conceal plan is recomputed.
 ## Provenance
 
 Marginalia is Apache-2.0. Initial code is original and scaffolded from the
-workspace Apache-2.0 plugin template. Do not copy or adapt code from
-non-Apache-2.0-compatible projects. If compatible external code is ever copied
-or adapted, reproduce that source's license and provenance in this repository.
+workspace Apache-2.0 plugin template.
+
+The `queries/` directory vendors Tree-sitter context queries from
+`nvim-treesitter/nvim-treesitter-context` at
+`b311b30818951d01f7b4bf650521b868b3fece16`. Those query files are licensed
+under the upstream MIT license; the license text and attribution are reproduced
+in `queries/LICENSE.nvim-treesitter-context` and `queries/README.md`.
 
 ## Installation
 
@@ -40,9 +51,30 @@ Example local `lazy.nvim` spec:
 {
     dir = vim.fn.expand("~/projects/neovim-plugin-orchestration/marginalia.nvim"),
     name = 'marginalia.nvim',
-    opts = {},
+    opts = {
+        context = {
+            max_depth = 4,
+            skip_node_types = {
+                'chunk',
+                'program',
+                'source_file',
+            },
+        },
+        viewport = {
+            respect_scrolloff = true,
+            scope = 'above_cursor',
+        },
+        render = {
+            conceallevel = 2,
+            priority = 200,
+        },
+    },
 }
 ```
+
+`enabled` and `auto_attach` are lifecycle-level setup options. Context,
+viewport, and render behavior belongs in the owning `context`, `viewport`, or
+`render` table.
 
 ## Development
 

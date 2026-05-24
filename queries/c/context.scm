@@ -1,0 +1,62 @@
+(preproc_if
+  (_)
+  (_) @context.end) @context
+
+(preproc_ifdef
+  name: (identifier)
+  (_) @context.end) @context
+
+(preproc_else
+  (_) @context.end) @context
+
+(preproc_elif
+  (_)
+  (_) @context.end) @context
+
+(preproc_elifdef
+  (_)
+  (_) @context.end) @context
+
+(function_definition
+  body: (_
+    (_) @context.end)) @context @context.header.function
+
+(compound_statement) @context @context.body.compound
+
+(for_statement
+  (compound_statement) @context.end) @context
+
+(if_statement
+  consequence: (_
+    (_) @context.end)) @context
+
+(else_clause
+  (_
+    (_) @context.end)) @context
+
+(while_statement
+  body: (_
+    (_) @context.end)) @context
+
+(do_statement
+  body: (_
+    (_) @context.end)) @context
+
+(struct_specifier
+  body: (_
+    (_) @context.end)) @context @context.header.struct
+
+(enum_specifier
+  body: (_
+    (_) @context.end)) @context
+
+(switch_statement
+  body: (_) @context.end) @context
+
+(case_statement
+  value: (_)
+  (_) @context.end) @context
+
+(declaration
+  declarator: (_
+    (_) @context.end)) @context

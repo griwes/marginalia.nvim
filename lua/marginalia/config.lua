@@ -1,12 +1,21 @@
 ---@class marginalia.Config
 ---@field enabled boolean
 ---@field auto_attach boolean
+---@field context marginalia.ContextConfig
+---@field viewport marginalia.ViewportConfig
+---@field render marginalia.RenderConfig
+
+---@class marginalia.ContextConfig
 ---@field max_depth integer
 ---@field skip_node_types table<string, boolean>
----@field conceallevel integer
----@field priority integer
+
+---@class marginalia.ViewportConfig
 ---@field respect_scrolloff boolean
 ---@field scope 'above_cursor'|'full_buffer'
+
+---@class marginalia.RenderConfig
+---@field conceallevel integer
+---@field priority integer
 
 local M = {}
 
@@ -14,15 +23,25 @@ local M = {}
 M.defaults = {
     enabled = true,
     auto_attach = true,
-    max_depth = 4,
-    conceallevel = 2,
-    priority = 200,
-    respect_scrolloff = true,
-    scope = 'above_cursor',
-    skip_node_types = {
-        chunk = true,
-        program = true,
-        source_file = true,
+    context = {
+        max_depth = 4,
+        skip_node_types = {
+            block_comment = true,
+            chunk = true,
+            comment = true,
+            normal_command = true,
+            preproc_include = true,
+            program = true,
+            source_file = true,
+        },
+    },
+    viewport = {
+        respect_scrolloff = true,
+        scope = 'above_cursor',
+    },
+    render = {
+        conceallevel = 2,
+        priority = 200,
     },
 }
 
@@ -45,28 +64,41 @@ end
 ---@param opts? marginalia.Config
 ---@return marginalia.Config
 function M.normalize(opts)
-    local config = vim.tbl_deep_extend('force', M.defaults, opts or {})
-    config.skip_node_types = normalize_type_set(config.skip_node_types)
+    local config = vim.tbl_deep_extend('force', vim.deepcopy(M.defaults), opts or {})
 
-    if type(config.max_depth) ~= 'number' or config.max_depth < 0 then
-        config.max_depth = M.defaults.max_depth
+    if type(config.context) ~= 'table' then
+        config.context = vim.deepcopy(M.defaults.context)
     end
 
-    config.max_depth = math.floor(config.max_depth)
+    if type(config.viewport) ~= 'table' then
+        config.viewport = vim.deepcopy(M.defaults.viewport)
+    end
+
+    if type(config.render) ~= 'table' then
+        config.render = vim.deepcopy(M.defaults.render)
+    end
+
+    config.context.skip_node_types = normalize_type_set(config.context.skip_node_types)
+
+    if type(config.context.max_depth) ~= 'number' or config.context.max_depth < 0 then
+        config.context.max_depth = M.defaults.context.max_depth
+    end
+
+    config.context.max_depth = math.floor(config.context.max_depth)
     config.enabled = config.enabled ~= false
     config.auto_attach = config.auto_attach ~= false
-    config.respect_scrolloff = config.respect_scrolloff ~= false
+    config.viewport.respect_scrolloff = config.viewport.respect_scrolloff ~= false
 
-    if type(config.conceallevel) ~= 'number' or config.conceallevel < 0 then
-        config.conceallevel = M.defaults.conceallevel
+    if type(config.render.conceallevel) ~= 'number' or config.render.conceallevel < 0 then
+        config.render.conceallevel = M.defaults.render.conceallevel
     end
 
-    if type(config.priority) ~= 'number' then
-        config.priority = M.defaults.priority
+    if type(config.render.priority) ~= 'number' then
+        config.render.priority = M.defaults.render.priority
     end
 
-    if config.scope ~= 'full_buffer' then
-        config.scope = 'above_cursor'
+    if config.viewport.scope ~= 'full_buffer' then
+        config.viewport.scope = 'above_cursor'
     end
 
     return config

@@ -1,8 +1,12 @@
+local render_apply = require('marginalia.render.apply')
+local render_provider = require('marginalia.render.provider')
 local window = require('marginalia.window')
 
 describe('marginalia.window', function()
     local previous_conceallevel
     local previous_scrolloff
+    local previous_global_scrolloff
+    local previous_restore_target_topline
 
     local function line_buffer(count)
         local bufnr = vim.api.nvim_create_buf(false, true)
@@ -19,17 +23,22 @@ describe('marginalia.window', function()
     before_each(function()
         previous_conceallevel = vim.wo.conceallevel
         previous_scrolloff = vim.wo.scrolloff
+        previous_global_scrolloff = vim.o.scrolloff
+        previous_restore_target_topline = render_apply.restore_target_topline
         vim.wo.conceallevel = 0
         vim.wo.scrolloff = 0
+        vim.o.scrolloff = 0
     end)
 
     after_each(function()
         window.detach()
         vim.wo.conceallevel = previous_conceallevel
         vim.wo.scrolloff = previous_scrolloff
+        vim.o.scrolloff = previous_global_scrolloff
+        render_apply.restore_target_topline = previous_restore_target_topline
     end)
 
-    it('sets and restores conceallevel around a non-empty conceal plan', function()
+    it('sets and restores conceallevel around a non-empty projection', function()
         local bufnr = line_buffer(40)
 
         vim.api.nvim_win_set_buf(0, bufnr)
@@ -38,7 +47,9 @@ describe('marginalia.window', function()
         vim.fn.winrestview({ topline = 10 })
 
         assert.is_true(window.attach(0, {
-            conceallevel = 2,
+            render = {
+                conceallevel = 2,
+            },
             frames = {
                 { row = 1 },
             },
@@ -52,366 +63,167 @@ describe('marginalia.window', function()
     end)
 
     it('leaves conceallevel alone when no context is available', function()
-        assert.is_true(window.attach(0, { conceallevel = 2, context_result = { frames = {}, reason = 'no_parser' } }))
+        assert.is_true(window.attach(0, {
+            render = {
+                conceallevel = 2,
+            },
+            context_result = { frames = {}, reason = 'no_parser' },
+        }))
         assert.are.equal(0, vim.wo.conceallevel)
     end)
 
-    it('applies a top-context stitching plan to the attached window', function()
-        local bufnr = line_buffer(20)
+    it('does not pin context rows that are already naturally visible', function()
+        local bufnr = line_buffer(40)
+        local restore_calls = 0
+
+        render_apply.restore_target_topline = function(...)
+            restore_calls = restore_calls + 1
+            return previous_restore_target_topline(...)
+        end
 
         vim.api.nvim_win_set_buf(0, bufnr)
-        vim.api.nvim_win_set_height(0, 8)
-        vim.api.nvim_win_set_cursor(0, { 8, 0 })
-        vim.fn.winrestview({ topline = 5 })
+        vim.api.nvim_win_set_height(0, 12)
+        vim.api.nvim_win_set_cursor(0, { 12, 0 })
+        vim.fn.winrestview({ topline = 1 })
 
         window.attach(0, {
-            max_depth = 4,
-            skip_node_types = {},
+            viewport = {
+                respect_scrolloff = false,
+            },
             frames = {
                 { row = 1 },
                 { row = 3 },
             },
         })
-        local state = window.state()
-        local marks = vim.api.nvim_buf_get_extmarks(bufnr, state.ns, 0, -1, { details = true })
-
-        assert.are.same({
-            { start_row = 2, end_row = 2 },
-            { start_row = 4, end_row = 6 },
-        }, state.last_plan.hidden_ranges)
-        assert.are.equal(2, #marks)
-        assert.are.equal('', marks[1][4].conceal_lines)
-
-        vim.api.nvim_buf_delete(bufnr, { force = true })
-    end)
-
-    it('protects scrolloff rows around the cursor', function()
-        local bufnr = vim.api.nvim_create_buf(false, true)
-
-        vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {
-            'function demo()',
-            '  one()',
-            '  two()',
-            '  three()',
-            '  four()',
-            '  five()',
-            'end',
-        })
-        vim.api.nvim_win_set_buf(0, bufnr)
-        vim.api.nvim_win_set_cursor(0, { 6, 2 })
-        vim.wo.scrolloff = 2
-
-        window.attach(0, {
-            frames = {
-                { row = 1 },
-            },
-        })
-        local state = window.state()
-
-        assert.are.same({ 1, 4, 5, 6, 7 }, state.last_plan.protected_rows)
-
-        vim.api.nvim_buf_delete(bufnr, { force = true })
-    end)
-
-    it('does not conceal rows below the context-covered viewport top', function()
-        local bufnr = line_buffer(140)
-
-        vim.api.nvim_win_set_buf(0, bufnr)
-        vim.api.nvim_win_set_height(0, 18)
-        vim.api.nvim_win_set_cursor(0, { 89, 0 })
-        vim.fn.winrestview({ topline = 80 })
-
-        window.attach(0, {
-            respect_scrolloff = false,
-            frames = {
-                { row = 71 },
-                { row = 72 },
-                { row = 76 },
-                { row = 77 },
-                { row = 81 },
-                { row = 82 },
-                { row = 86 },
-                { row = 87 },
-            },
-        })
 
         local state = window.state()
 
-        for _, range in ipairs(state.last_plan.hidden_ranges) do
-            assert.is_true(range.end_row < 86)
-        end
+        assert.are.equal(1, state.viewport.applied_projection.actual_viewport.topline)
+        assert.are.same({}, state.render.plan.hidden_ranges)
+        assert.are.equal(1, vim.fn.line('w0'))
+        assert.are.equal(0, restore_calls)
 
         vim.api.nvim_buf_delete(bufnr, { force = true })
     end)
 
-    it('does not let scrolloff protect rows replaced by context', function()
-        local bufnr = line_buffer(140)
+    it('pins only context rows above the projected virtual body viewport', function()
+        local bufnr = line_buffer(60)
 
         vim.api.nvim_win_set_buf(0, bufnr)
-        vim.api.nvim_win_set_height(0, 18)
-        vim.api.nvim_win_set_cursor(0, { 89, 0 })
-        vim.wo.scrolloff = 5
-        vim.fn.winrestview({ topline = 80 })
-
-        window.attach(0, {
-            frames = {
-                { row = 71 },
-                { row = 72 },
-                { row = 76 },
-                { row = 77 },
-                { row = 81 },
-                { row = 82 },
-                { row = 86 },
-                { row = 87 },
-            },
-        })
-
-        assert.are.same({
-            { start_row = 73, end_row = 75 },
-            { start_row = 78, end_row = 80 },
-            { start_row = 83, end_row = 85 },
-        }, window.state().last_plan.hidden_ranges)
-
-        vim.api.nvim_buf_delete(bufnr, { force = true })
-    end)
-
-    it('anchors the view at the first stitched context row', function()
-        local bufnr = line_buffer(40)
-
-        vim.api.nvim_win_set_buf(0, bufnr)
-        vim.api.nvim_win_set_height(0, 8)
-        vim.api.nvim_win_set_cursor(0, { 12, 0 })
+        vim.api.nvim_win_set_height(0, 20)
+        vim.api.nvim_win_set_cursor(0, { 20, 0 })
         vim.fn.winrestview({ topline = 10 })
 
         window.attach(0, {
-            respect_scrolloff = false,
+            viewport = {
+                respect_scrolloff = false,
+            },
             frames = {
                 { row = 1 },
-                { row = 2 },
-            },
-        })
-
-        assert.are.equal(1, vim.fn.winsaveview().topline)
-
-        vim.api.nvim_buf_delete(bufnr, { force = true })
-    end)
-
-    it('preserves the logical viewport when refreshing an anchored context', function()
-        local bufnr = line_buffer(220)
-
-        vim.api.nvim_win_set_buf(0, bufnr)
-        vim.api.nvim_win_set_height(0, 18)
-        vim.api.nvim_win_set_cursor(0, { 179, 0 })
-        vim.fn.winrestview({ topline = 170 })
-
-        local opts = {
-            respect_scrolloff = false,
-            frames = {
-                { row = 129 },
-                { row = 130 },
-                { row = 173 },
-            },
-        }
-
-        window.attach(0, opts)
-        assert.are.equal(129, vim.fn.winsaveview().topline)
-        assert.are.same({
-            { start_row = 131, end_row = 171 },
-        }, window.state().last_plan.hidden_ranges)
-
-        window.refresh(0, opts)
-
-        assert.are.equal(129, vim.fn.winsaveview().topline)
-        assert.are.same({
-            { start_row = 131, end_row = 171 },
-        }, window.state().last_plan.hidden_ranges)
-
-        vim.api.nvim_buf_delete(bufnr, { force = true })
-    end)
-
-    it('preserves the logical viewport across synthetic scroll refreshes', function()
-        local bufnr = line_buffer(140)
-
-        vim.api.nvim_win_set_buf(0, bufnr)
-        vim.api.nvim_win_set_height(0, 18)
-        vim.api.nvim_win_set_cursor(0, { 104, 0 })
-        vim.wo.scrolloff = 5
-        vim.fn.winrestview({ topline = 92 })
-
-        local opts = {
-            frames = {
-                { row = 71 },
-                { row = 72 },
-                { row = 76 },
-                { row = 77 },
-                { row = 81 },
-                { row = 82 },
-            },
-        }
-        local expected_ranges = {
-            { start_row = 73, end_row = 75 },
-            { start_row = 78, end_row = 80 },
-            { start_row = 83, end_row = 97 },
-        }
-
-        window.attach(0, opts)
-        assert.are.same(expected_ranges, window.state().last_plan.hidden_ranges)
-        assert.are.equal(71, vim.fn.winsaveview().topline)
-
-        vim.fn.winrestview({ topline = 73 })
-        window.refresh(0, opts)
-        assert.are.equal(71, vim.fn.winsaveview().topline)
-        assert.are.same(expected_ranges, window.state().last_plan.hidden_ranges)
-
-        vim.fn.winrestview({ topline = 95 })
-        window.refresh(0, opts)
-        assert.are.equal(71, vim.fn.winsaveview().topline)
-        assert.are.same(expected_ranges, window.state().last_plan.hidden_ranges)
-
-        vim.api.nvim_buf_delete(bufnr, { force = true })
-    end)
-
-    it('uses the scrolloff-adjusted logical viewport for initial context stitching', function()
-        local bufnr = line_buffer(140)
-
-        vim.api.nvim_win_set_buf(0, bufnr)
-        vim.api.nvim_win_set_height(0, 18)
-        vim.api.nvim_win_set_cursor(0, { 104, 0 })
-        vim.wo.scrolloff = 5
-        vim.fn.winrestview({ topline = 90 })
-
-        window.attach(0, {
-            frames = {
-                { row = 71, type = 'namespace_definition' },
-                { row = 72, type = 'declaration_list' },
-                { row = 76, type = 'function_definition' },
-                { row = 77, type = 'compound_statement' },
-                { row = 81, type = 'while_statement' },
-                { row = 82, type = 'compound_statement' },
-            },
-        })
-
-        assert.are.equal(71, vim.fn.winsaveview().topline)
-        assert.are.same({
-            { start_row = 73, end_row = 75 },
-            { start_row = 78, end_row = 80 },
-            { start_row = 83, end_row = 97 },
-        }, window.state().last_plan.hidden_ranges)
-
-        vim.api.nvim_buf_delete(bufnr, { force = true })
-    end)
-
-    it('skips a bare compound context row when its owner header is not displayed', function()
-        local bufnr = line_buffer(220)
-
-        vim.api.nvim_win_set_buf(0, bufnr)
-        vim.api.nvim_win_set_height(0, 18)
-        vim.api.nvim_win_set_cursor(0, { 199, 0 })
-        vim.fn.winrestview({ topline = 190 })
-
-        window.attach(0, {
-            respect_scrolloff = false,
-            frames = {
-                { row = 129, type = 'linkage_specification' },
-                { row = 129, type = 'function_definition' },
-                { row = 130, type = 'compound_statement' },
-                { row = 173, type = 'compound_statement' },
-            },
-        })
-
-        assert.are.equal(129, vim.fn.winsaveview().topline)
-        assert.are.same({
-            { start_row = 131, end_row = 189 },
-        }, window.state().last_plan.hidden_ranges)
-
-        vim.api.nvim_buf_delete(bufnr, { force = true })
-    end)
-
-    it('keeps adjacent linewise movement on adjacent physical rows', function()
-        local bufnr = line_buffer(40)
-
-        vim.api.nvim_win_set_buf(0, bufnr)
-        vim.api.nvim_win_set_height(0, 8)
-        vim.api.nvim_win_set_cursor(0, { 5, 0 })
-        vim.fn.winrestview({ topline = 1 })
-
-        window.attach(0, {
-            respect_scrolloff = false,
-            frames = {
-                { row = 1 },
-                { row = 3 },
-            },
-        })
-
-        local initial_winline = vim.fn.winline()
-        assert.are.equal(5, initial_winline)
-
-        vim.api.nvim_win_set_cursor(0, { 6, 0 })
-        window.refresh(0, {
-            respect_scrolloff = false,
-            frames = {
-                { row = 1 },
-                { row = 4 },
+                { row = 10 },
             },
         })
 
         local state = window.state()
 
-        assert.are.equal(initial_winline + 1, vim.fn.winline())
-        assert.are.same({ 1, 4, 6 }, state.last_plan.protected_rows)
-
-        local second_winline = vim.fn.winline()
-
-        vim.api.nvim_win_set_cursor(0, { 7, 0 })
-        window.refresh(0, {
-            respect_scrolloff = false,
-            frames = {
-                { row = 1 },
-                { row = 5 },
-            },
-        })
-
-        assert.are.equal(second_winline + 1, vim.fn.winline())
+        assert.are.same({ 1, 10 }, state.viewport.applied_projection.context_rows)
+        assert.are.equal(12, state.viewport.applied_projection.virtual_viewport.topline)
+        assert.are.equal(1, state.viewport.applied_projection.actual_viewport.topline)
+        assert.are.same({
+            { start_row = 2, end_row = 9 },
+            { start_row = 11, end_row = 11 },
+        }, state.render.plan.hidden_ranges)
 
         vim.api.nvim_buf_delete(bufnr, { force = true })
     end)
 
-    it('scrolls the view when expanded context would overshoot adjacent movement', function()
-        local bufnr = line_buffer(40)
+    it('keeps body rows visible when native linewise scrolling starts', function()
+        local bufnr = line_buffer(60)
 
         vim.api.nvim_win_set_buf(0, bufnr)
-        vim.api.nvim_win_set_height(0, 8)
-        vim.api.nvim_win_set_cursor(0, { 5, 0 })
+        vim.api.nvim_win_set_height(0, 18)
+        vim.wo.scrolloff = 0
+        vim.api.nvim_win_set_cursor(0, { 18, 0 })
         vim.fn.winrestview({ topline = 1 })
 
+        local opts = {
+            viewport = {
+                respect_scrolloff = false,
+            },
+            frames = {
+                { row = 1, type = 'section' },
+                { row = 3, type = 'section' },
+            },
+        }
+
+        window.attach(0, opts)
+        vim.cmd('normal! j')
+        window.refresh(0, vim.tbl_extend('force', opts, { _event = 'CursorMoved' }))
+
+        assert.are.equal(19, vim.api.nvim_win_get_cursor(0)[1])
+        assert.are.same({}, window.state().render.plan.hidden_ranges)
+        assert.are.equal(18, vim.fn.winline())
+
+        vim.api.nvim_buf_delete(bufnr, { force = true })
+    end)
+
+    it('records user and effective scrolloff separately after render suppression', function()
+        local bufnr = line_buffer(80)
+
+        vim.api.nvim_win_set_buf(0, bufnr)
+        vim.api.nvim_win_set_height(0, 20)
+        vim.wo.scrolloff = 5
+        vim.api.nvim_win_set_cursor(0, { 40, 0 })
+        vim.fn.winrestview({ topline = 31 })
+
         window.attach(0, {
-            respect_scrolloff = false,
             frames = {
                 { row = 1 },
-                { row = 3 },
+                { row = 20 },
             },
         })
 
-        local initial_winline = vim.fn.winline()
+        assert.are.same({
+            user = 5,
+            effective = 5,
+        }, window.state().viewport.applied_projection.scrolloff)
+        assert.are.equal(0, vim.wo.scrolloff)
 
-        assert.are.equal(5, initial_winline)
+        vim.api.nvim_buf_delete(bufnr, { force = true })
+    end)
 
-        vim.api.nvim_win_set_cursor(0, { 6, 0 })
+    it('ignores WinScrolled echoes caused by its own redraw work', function()
+        local bufnr = line_buffer(120)
+
+        vim.api.nvim_win_set_buf(0, bufnr)
+        vim.api.nvim_win_set_height(0, 40)
+        vim.api.nvim_win_set_cursor(0, { 78, 0 })
+        vim.wo.scrolloff = 0
+        vim.fn.winrestview({ topline = 59 })
+
+        local opts = {
+            viewport = {
+                respect_scrolloff = false,
+            },
+            frames = {
+                { row = 1, type = 'section' },
+                { row = 9, type = 'section' },
+                { row = 41, type = 'section' },
+            },
+        }
+
+        window.attach(0, opts)
+        local expected = vim.deepcopy(window.state().render.plan.hidden_ranges)
+
         window.refresh(0, {
-            respect_scrolloff = false,
-            frames = {
-                { row = 1 },
-                { row = 2 },
-                { row = 3 },
-                { row = 4 },
+            _event = 'WinScrolled',
+            viewport = {
+                respect_scrolloff = false,
             },
+            context_result = { frames = {}, reason = 'transient_redraw_probe' },
         })
 
-        local state = window.state()
-
-        assert.are.equal(initial_winline + 1, vim.fn.winline())
-        assert.are.equal(1, vim.fn.winsaveview().topline)
-        assert.are.same({ 1, 2, 3, 4, 6 }, state.last_plan.protected_rows)
+        assert.are.same(expected, window.state().render.plan.hidden_ranges)
 
         vim.api.nvim_buf_delete(bufnr, { force = true })
     end)
@@ -431,7 +243,10 @@ describe('marginalia.window', function()
         window.refresh(0, { context_result = { frames = {}, reason = 'no_parser' } })
 
         local state = window.state()
+
         assert.are.same({}, vim.api.nvim_buf_get_extmarks(bufnr, state.ns, 0, -1, {}))
+        assert.are.same({}, vim.api.nvim_buf_get_extmarks(bufnr, render_provider.namespace(), 0, -1, {}))
+        assert.is_nil(render_provider.debug_window(state.winid))
 
         vim.api.nvim_buf_delete(bufnr, { force = true })
     end)
