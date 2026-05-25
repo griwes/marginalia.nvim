@@ -64,8 +64,46 @@ function M.detach(winid)
     window_state.remove(winid)
 end
 
+---@param state marginalia.WindowState
+---@param snapshot marginalia.WindowSnapshot
+---@param classification marginalia.RefreshEventClassification
+---@return boolean
+local function reassert_scroll_echo_if_needed(state, snapshot, classification)
+    if classification.kind ~= 'transaction_echo' then
+        return false
+    end
+
+    local projection = state.viewport.applied_projection
+    local target_topline = projection and projection.actual_viewport and projection.actual_viewport.topline
+    local plan = state.render.plan
+    local current_topline = snapshot.raw_view.topline
+
+    if
+        not target_topline
+        or current_topline == target_topline
+        or #(plan and plan.hidden_ranges or {}) == 0
+        or state.transaction.scroll_echo_reasserted_epoch == state.transaction.epoch
+    then
+        return false
+    end
+
+    render_apply.restore_target_topline(state, target_topline)
+
+    local post_apply_view = vim.fn.winsaveview()
+
+    window_state.record_scroll_echo_reassertion(state, {
+        raw_topline = post_apply_view.topline,
+        post_apply_view = post_apply_view,
+        cursor_row = snapshot.cursor_row,
+        cursor_winline = vim.fn.winline(),
+        native_cursor_winline = snapshot.native_winline,
+    })
+
+    return true
+end
+
 ---@param winid? integer
----@param opts? marginalia.Config|{ frames?: marginalia.ContextFrame[], context_result?: marginalia.ContextResult, _event?: string }
+---@param opts? marginalia.Config|{ frames?: marginalia.ContextFrame[], context_result?: marginalia.ContextResult, _event?: string, _logical_scroll_delta?: integer }
 ---@return { visible_rows: integer[], hidden_ranges: marginalia.HiddenRange[] }?
 local function refresh_current_window(winid, opts)
     local state = window_state.get(winid)
@@ -103,6 +141,7 @@ local function refresh_current_window(winid, opts)
     })
 
     if event_classification.kind == 'transaction_echo' then
+        reassert_scroll_echo_if_needed(state, snapshot, event_classification)
         return state.render.plan
     end
 
@@ -148,18 +187,24 @@ local function refresh_current_window(winid, opts)
         scrolloff = window_state.effective_scrolloff(state)
     end
 
+    -- Measure raw row heights for the next projection, not the old materialized
+    -- conceal marks from the previous projection.
+    render_provider.clear_buffer(bufnr)
+
     local planner_projection = window_planner.project({
         snapshot = snapshot,
         state = state,
         context_frames = context_result.frames,
         scrolloff = scrolloff,
         event = event_classification.planner_event,
+        logical_scroll_delta = opts and opts._logical_scroll_delta or nil,
     })
     local plan = window_apply.apply_projection({
         bufnr = bufnr,
         state = state,
         projection = planner_projection,
         priority = resolved.render.priority,
+        prime = true,
     })
 
     render_apply.apply_window_options(state, plan, resolved.render.conceallevel)
@@ -167,7 +212,7 @@ local function refresh_current_window(winid, opts)
     local has_hidden_ranges = #(plan.hidden_ranges or {}) > 0
 
     if has_hidden_ranges and planner_projection.actual_viewport and planner_projection.actual_viewport.topline then
-        render_apply.restore_target_topline(winid, planner_projection.actual_viewport.topline)
+        render_apply.restore_target_topline(state, planner_projection.actual_viewport.topline)
     end
 
     local post_apply_view = vim.fn.winsaveview()
@@ -177,6 +222,7 @@ local function refresh_current_window(winid, opts)
         context_topline = planner_projection.context_rows[1],
         logical_topline = planner_projection.virtual_viewport.topline,
         raw_topline = post_apply_view.topline,
+        previous_raw_topline = raw_previous_view.topline,
         post_apply_view = post_apply_view,
         cursor_row = cursor_row,
         cursor_winline = planner_projection.cursor_physical_row,

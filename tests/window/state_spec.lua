@@ -101,6 +101,7 @@ describe('marginalia.window.state', function()
             context_topline = 1,
             logical_topline = 3,
             raw_topline = 4,
+            previous_raw_topline = 2,
             post_apply_view = { topline = 4 },
             cursor_row = 8,
             cursor_winline = 5,
@@ -123,8 +124,37 @@ describe('marginalia.window.state', function()
         assert.are.equal(1, state.transaction.epoch)
         assert.are.equal(1, state.transaction.expected_scroll_echo.epoch)
         assert.are.equal(4, state.transaction.expected_scroll_echo.raw_topline)
+        assert.are.same({
+            [2] = true,
+            [4] = true,
+        }, state.transaction.expected_scroll_echo.raw_toplines)
         assert.are.same({ scrolloff = true }, state.transaction.expected_option_echo.options)
         assert.is_nil(state.transaction.pending_option_echoes)
+    end)
+
+    it('does not record impossible empty option echoes', function()
+        local state = {
+            cursor = {},
+            viewport = {},
+            render = {},
+            transaction = {},
+        }
+        local plan = {
+            visible_rows = {},
+            hidden_ranges = {},
+            projection = {},
+        }
+
+        window_state.record_apply_result(state, {
+            plan = plan,
+            logical_topline = 1,
+            raw_topline = 1,
+            post_apply_view = { topline = 1 },
+            cursor_row = 1,
+            cursor_winline = 1,
+        })
+
+        assert.is_nil(state.transaction.expected_option_echo)
     end)
 
     it('records empty results in structured state fields', function()

@@ -19,6 +19,10 @@ local refresh_impl = window.refresh
 ---@param events table<string, true>
 ---@return string?
 local function primary_event(events)
+    if events.MouseScrolled then
+        return 'MouseScrolled'
+    end
+
     if events.CursorMovedI then
         return 'CursorMovedI'
     end
@@ -56,6 +60,19 @@ local function drain(winid)
     refresh_impl(winid, opts)
 end
 
+---@param winid integer
+local function schedule_drain(winid)
+    if scheduled[winid] then
+        return
+    end
+
+    scheduled[winid] = true
+
+    vim.schedule(function()
+        drain(winid)
+    end)
+end
+
 ---@param winid? integer
 ---@param opts? table
 function M.enqueue(winid, opts)
@@ -89,15 +106,12 @@ function M.enqueue(winid, opts)
         invalidation.events[event] = true
     end
 
-    if scheduled[winid] then
+    if opts._defer or vim.in_fast_event() then
+        schedule_drain(winid)
         return
     end
 
-    scheduled[winid] = true
-
-    vim.schedule(function()
-        drain(winid)
-    end)
+    drain(winid)
 end
 
 ---@param winid? integer

@@ -1,6 +1,25 @@
 local render_apply = require('marginalia.render.apply')
 
 describe('marginalia.render.apply', function()
+    it('marks temporary target-topline scrolloff writes as transaction echoes', function()
+        local winid = vim.api.nvim_get_current_win()
+        local previous_scrolloff = vim.wo[winid].scrolloff
+
+        vim.wo[winid].scrolloff = 4
+
+        local state = {
+            winid = winid,
+            transaction = {},
+        }
+
+        render_apply.restore_target_topline(state, 1)
+
+        assert.are.equal(4, vim.wo[winid].scrolloff)
+        assert.are.same({ scrolloff = true }, state.transaction.pending_option_echoes)
+
+        vim.wo[winid].scrolloff = previous_scrolloff
+    end)
+
     it('applies and restores window options from render plans', function()
         local winid = vim.api.nvim_get_current_win()
         local previous_scrolloff = vim.wo[winid].scrolloff

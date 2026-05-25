@@ -35,6 +35,27 @@ describe('marginalia.window.event', function()
         assert.are.equal('WinScrolled', classification.planner_event)
     end)
 
+    it('classifies redraw compensation back to the pre-apply topline as a transaction echo', function()
+        local classification = event.classify({
+            event = 'WinScrolled',
+            transaction_epoch = 4,
+            cursor_row = 79,
+            raw_topline = 4,
+            expected_scroll_echo = {
+                epoch = 4,
+                cursor_row = 79,
+                raw_topline = 5,
+                raw_toplines = {
+                    [4] = true,
+                    [5] = true,
+                },
+            },
+        })
+
+        assert.are.equal('transaction_echo', classification.kind)
+        assert.is_nil(classification.planner_event)
+    end)
+
     it('classifies async parse completion as semantic context change', function()
         local classification = event.classify({
             event = 'ContextParsed',
@@ -102,6 +123,18 @@ describe('marginalia.window.event', function()
         assert.are.equal('CursorMoved', classification.planner_event)
     end)
 
+    it('classifies logical mouse scrolls as user intent', function()
+        local classification = event.classify({
+            event = 'MouseScrolled',
+            cursor_row = 20,
+            raw_topline = 11,
+        })
+
+        assert.are.equal('user_intent', classification.kind)
+        assert.are.equal('MouseScrolled', classification.primary_event)
+        assert.are.equal('MouseScrolled', classification.planner_event)
+    end)
+
     it('classifies matching option mutations as transaction echoes', function()
         local classification = event.classify({
             event = 'OptionSet:scrolloff',
@@ -151,7 +184,7 @@ describe('marginalia.window.event', function()
         assert.are.equal('semantic_context_changed', classification.planner_event)
     end)
 
-    it('classifies refreshes and clears consumed transaction echo state', function()
+    it('classifies refreshes and clears consumed scroll echo state without dropping pending option echoes', function()
         local state = {
             transaction = {
                 epoch = 3,
@@ -177,6 +210,44 @@ describe('marginalia.window.event', function()
 
         assert.are.equal('transaction_echo', classification.kind)
         assert.is_nil(state.transaction.expected_scroll_echo)
+        assert.are.same({ scrolloff = true }, state.transaction.expected_option_echo.options)
+    end)
+
+    it('allows option echoes to arrive after scroll echoes from the same transaction', function()
+        local state = {
+            transaction = {
+                epoch = 3,
+                expected_scroll_echo = {
+                    epoch = 3,
+                    cursor_row = 20,
+                    raw_topline = 11,
+                },
+                expected_option_echo = {
+                    epoch = 3,
+                    options = {
+                        scrolloff = true,
+                    },
+                },
+            },
+        }
+
+        local scroll_classification = event.classify_refresh(state, {
+            refresh_event = 'WinScrolled',
+            cursor_row = 20,
+            raw_topline = 11,
+        })
+
+        assert.are.equal('transaction_echo', scroll_classification.kind)
+        assert.is_nil(state.transaction.expected_scroll_echo)
+        assert.are.same({ scrolloff = true }, state.transaction.expected_option_echo.options)
+
+        local option_classification = event.classify_refresh(state, {
+            refresh_event = 'OptionSet:scrolloff',
+            cursor_row = 20,
+            raw_topline = 11,
+        })
+
+        assert.are.equal('transaction_echo', option_classification.kind)
         assert.is_nil(state.transaction.expected_option_echo)
     end)
 end)

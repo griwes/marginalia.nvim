@@ -32,12 +32,17 @@ function M.restore_view(view)
     vim.fn.winrestview(view)
 end
 
----@param winid integer
+---@param state marginalia.WindowState
 ---@param topline integer
-function M.restore_target_topline(winid, topline)
-    vim.api.nvim_win_call(winid, function()
+function M.restore_target_topline(state, topline)
+    if not valid_win(state.winid) then
+        return
+    end
+
+    vim.api.nvim_win_call(state.winid, function()
         local scrolloff = vim.wo.scrolloff
 
+        mark_option_echo(state, 'scrolloff')
         vim.wo.scrolloff = 0
         vim.fn.winrestview({ topline = topline })
         vim.wo.scrolloff = scrolloff

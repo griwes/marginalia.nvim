@@ -49,9 +49,10 @@ local M = {}
 
 ---@class marginalia.WindowTransactionState
 ---@field epoch? integer
----@field expected_scroll_echo? { epoch: integer, cursor_row: integer, raw_topline: integer }
+---@field expected_scroll_echo? { epoch: integer, cursor_row: integer, raw_topline: integer, raw_toplines?: table<integer, true> }
 ---@field expected_option_echo? { epoch: integer, options: table<string, true> }
 ---@field pending_option_echoes? table<string, true>
+---@field scroll_echo_reasserted_epoch? integer
 
 ---@type table<integer, marginalia.WindowState>
 local windows = {}
@@ -214,7 +215,7 @@ function M.record_cursor_row(state, cursor_row, winline, native_winline)
 end
 
 ---@param state marginalia.WindowState
----@param opts { plan: table, context_topline?: integer, logical_topline: integer, raw_topline: integer, post_apply_view: table, cursor_row: integer, cursor_winline: integer, native_cursor_winline?: integer, scrolloff?: table }
+---@param opts { plan: table, context_topline?: integer, logical_topline: integer, raw_topline: integer, previous_raw_topline?: integer, post_apply_view: table, cursor_row: integer, cursor_winline: integer, native_cursor_winline?: integer, scrolloff?: table }
 function M.record_apply_result(state, opts)
     local plan = opts.plan
 
@@ -223,6 +224,7 @@ function M.record_apply_result(state, opts)
     state.viewport.logical_topline = opts.logical_topline
     state.viewport.raw_topline = opts.raw_topline
     state.transaction.epoch = (state.transaction.epoch or 0) + 1
+    state.transaction.scroll_echo_reasserted_epoch = nil
 
     plan.projection.scrolloff = opts.scrolloff
     state.viewport.applied_projection = plan.projection
@@ -238,11 +240,50 @@ function M.record_apply_result(state, opts)
         epoch = state.transaction.epoch,
         cursor_row = opts.cursor_row,
         raw_topline = state.viewport.raw_topline,
+        raw_toplines = {
+            [state.viewport.raw_topline] = true,
+            [opts.previous_raw_topline or state.viewport.raw_topline] = true,
+        },
     }
-    state.transaction.expected_option_echo = {
-        epoch = state.transaction.epoch,
-        options = state.transaction.pending_option_echoes or {},
+    if state.transaction.pending_option_echoes and next(state.transaction.pending_option_echoes) ~= nil then
+        state.transaction.expected_option_echo = {
+            epoch = state.transaction.epoch,
+            options = state.transaction.pending_option_echoes,
+        }
+    else
+        state.transaction.expected_option_echo = nil
+    end
+
+    state.transaction.pending_option_echoes = nil
+end
+
+---@param state marginalia.WindowState
+---@param opts { raw_topline: integer, cursor_row: integer, cursor_winline: integer, native_cursor_winline?: integer, post_apply_view: table }
+function M.record_scroll_echo_reassertion(state, opts)
+    local epoch = state.transaction.epoch
+
+    state.viewport.raw_topline = opts.raw_topline
+    state.viewport.post_apply_view = opts.post_apply_view
+
+    M.record_cursor_row(state, opts.cursor_row, opts.cursor_winline, opts.native_cursor_winline)
+
+    state.transaction.scroll_echo_reasserted_epoch = epoch
+    state.transaction.expected_scroll_echo = {
+        epoch = epoch,
+        cursor_row = opts.cursor_row,
+        raw_topline = opts.raw_topline,
+        raw_toplines = {
+            [opts.raw_topline] = true,
+        },
     }
+
+    if state.transaction.pending_option_echoes and next(state.transaction.pending_option_echoes) ~= nil then
+        state.transaction.expected_option_echo = {
+            epoch = epoch,
+            options = state.transaction.pending_option_echoes,
+        }
+    end
+
     state.transaction.pending_option_echoes = nil
 end
 

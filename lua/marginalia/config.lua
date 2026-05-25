@@ -4,6 +4,7 @@
 ---@field context marginalia.ContextConfig
 ---@field viewport marginalia.ViewportConfig
 ---@field render marginalia.RenderConfig
+---@field input marginalia.InputConfig
 
 ---@class marginalia.ContextConfig
 ---@field max_depth integer
@@ -16,6 +17,9 @@
 ---@class marginalia.RenderConfig
 ---@field conceallevel integer
 ---@field priority integer
+
+---@class marginalia.InputConfig
+---@field mouse_scroll boolean
 
 local M = {}
 
@@ -42,6 +46,9 @@ M.defaults = {
     render = {
         conceallevel = 2,
         priority = 200,
+    },
+    input = {
+        mouse_scroll = true,
     },
 }
 
@@ -78,6 +85,10 @@ function M.normalize(opts)
         config.render = vim.deepcopy(M.defaults.render)
     end
 
+    if type(config.input) ~= 'table' then
+        config.input = vim.deepcopy(M.defaults.input)
+    end
+
     config.context.skip_node_types = normalize_type_set(config.context.skip_node_types)
 
     if type(config.context.max_depth) ~= 'number' or config.context.max_depth < 0 then
@@ -87,6 +98,7 @@ function M.normalize(opts)
     config.context.max_depth = math.floor(config.context.max_depth)
     config.enabled = config.enabled ~= false
     config.auto_attach = config.auto_attach ~= false
+    config.input.mouse_scroll = config.input.mouse_scroll ~= false
     config.viewport.respect_scrolloff = config.viewport.respect_scrolloff ~= false
 
     if type(config.render.conceallevel) ~= 'number' or config.render.conceallevel < 0 then

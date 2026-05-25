@@ -137,7 +137,7 @@ describe('marginalia.window', function()
         vim.api.nvim_buf_delete(bufnr, { force = true })
     end)
 
-    it('keeps body rows visible when native linewise scrolling starts', function()
+    it('pins context when native linewise scrolling starts', function()
         local bufnr = line_buffer(60)
 
         vim.api.nvim_win_set_buf(0, bufnr)
@@ -161,8 +161,125 @@ describe('marginalia.window', function()
         window.refresh(0, vim.tbl_extend('force', opts, { _event = 'CursorMoved' }))
 
         assert.are.equal(19, vim.api.nvim_win_get_cursor(0)[1])
-        assert.are.same({}, window.state().render.plan.hidden_ranges)
+        assert.are.same({ 1 }, window.state().viewport.applied_projection.context_rows)
+        assert.are.same({
+            { start_row = 2, end_row = 2 },
+        }, window.state().render.plan.hidden_ranges)
         assert.are.equal(18, vim.fn.winline())
+
+        vim.api.nvim_buf_delete(bufnr, { force = true })
+    end)
+
+    it('records the settled viewport after conceal redraws', function()
+        local bufnr = line_buffer(120)
+
+        vim.api.nvim_win_set_buf(0, bufnr)
+        vim.api.nvim_win_set_height(0, 78)
+        vim.wo.scrolloff = 0
+        vim.api.nvim_win_set_cursor(0, { 78, 0 })
+        vim.fn.winrestview({ topline = 3 })
+
+        local opts = {
+            viewport = {
+                respect_scrolloff = false,
+            },
+            frames = {
+                { row = 1, type = 'section' },
+                { row = 9, type = 'section' },
+                { row = 75, type = 'section' },
+            },
+        }
+
+        window.attach(0, opts)
+        vim.cmd('normal! j')
+        window.refresh(0, vim.tbl_extend('force', opts, { _event = 'CursorMoved' }))
+        vim.cmd('redraw')
+
+        local state = window.state()
+        local settled_view = vim.fn.winsaveview()
+
+        assert.are.equal(settled_view.topline, state.viewport.raw_topline)
+        assert.are.equal(settled_view.topline, state.transaction.expected_scroll_echo.raw_topline)
+
+        vim.api.nvim_buf_delete(bufnr, { force = true })
+    end)
+
+    it('reasserts the target viewport when conceal redraw echoes land on the previous topline', function()
+        local bufnr = line_buffer(120)
+
+        vim.api.nvim_win_set_buf(0, bufnr)
+        vim.api.nvim_win_set_height(0, 78)
+        vim.wo.scrolloff = 0
+        vim.api.nvim_win_set_cursor(0, { 77, 0 })
+        vim.fn.winrestview({ topline = 2 })
+
+        local opts = {
+            viewport = {
+                respect_scrolloff = false,
+            },
+            frames = {
+                { row = 1, type = 'section' },
+            },
+        }
+
+        window.attach(0, opts)
+
+        local state = window.state()
+        local target_topline = state.viewport.applied_projection.actual_viewport.topline
+
+        assert.are.equal(1, target_topline)
+        assert.are.equal(target_topline, vim.fn.line('w0'))
+
+        vim.fn.winrestview({ topline = 2 })
+
+        assert.are.equal(2, vim.fn.line('w0'))
+        assert.is_true(state.transaction.expected_scroll_echo.raw_toplines[2])
+
+        window.refresh(0, vim.tbl_extend('force', opts, { _event = 'WinScrolled' }))
+
+        state = window.state()
+
+        assert.are.equal(target_topline, state.viewport.raw_topline)
+        assert.are.equal(target_topline, vim.fn.line('w0'))
+        assert.are.equal(state.transaction.epoch, state.transaction.scroll_echo_reasserted_epoch)
+
+        vim.api.nvim_buf_delete(bufnr, { force = true })
+    end)
+
+    it('reasserts the target viewport when scroll drift is observed during an option echo', function()
+        local bufnr = line_buffer(120)
+
+        vim.api.nvim_win_set_buf(0, bufnr)
+        vim.api.nvim_win_set_height(0, 78)
+        vim.wo.scrolloff = 0
+        vim.api.nvim_win_set_cursor(0, { 77, 0 })
+        vim.fn.winrestview({ topline = 2 })
+
+        local opts = {
+            viewport = {
+                respect_scrolloff = false,
+            },
+            frames = {
+                { row = 1, type = 'section' },
+            },
+        }
+
+        window.attach(0, opts)
+
+        local state = window.state()
+        local target_topline = state.viewport.applied_projection.actual_viewport.topline
+
+        assert.are.equal(1, target_topline)
+        assert.is_not_nil(state.transaction.expected_option_echo)
+
+        vim.fn.winrestview({ topline = 2 })
+        window.refresh(0, vim.tbl_extend('force', opts, { _event = 'OptionSet:scrolloff' }))
+
+        state = window.state()
+
+        assert.are.equal(target_topline, state.viewport.raw_topline)
+        assert.are.equal(target_topline, vim.fn.line('w0'))
+        assert.are.equal(state.transaction.epoch, state.transaction.scroll_echo_reasserted_epoch)
 
         vim.api.nvim_buf_delete(bufnr, { force = true })
     end)
@@ -188,6 +305,45 @@ describe('marginalia.window', function()
             effective = 5,
         }, window.state().viewport.applied_projection.scrolloff)
         assert.are.equal(0, vim.wo.scrolloff)
+
+        vim.api.nvim_buf_delete(bufnr, { force = true })
+    end)
+
+    it('marks target-topline scrolloff echoes after initial suppression was consumed', function()
+        local bufnr = line_buffer(120)
+
+        vim.api.nvim_win_set_buf(0, bufnr)
+        vim.api.nvim_win_set_height(0, 40)
+        vim.wo.scrolloff = 0
+        vim.api.nvim_win_set_cursor(0, { 82, 0 })
+        vim.fn.winrestview({ topline = 11 })
+
+        local opts = {
+            viewport = {
+                respect_scrolloff = false,
+            },
+            frames = {
+                { row = 1, type = 'section' },
+                { row = 9, type = 'section' },
+                { row = 79, type = 'section' },
+            },
+        }
+
+        window.attach(0, opts)
+
+        window.refresh(0, {
+            _event = 'OptionSet:scrolloff',
+            viewport = {
+                respect_scrolloff = false,
+            },
+            context_result = { frames = {}, reason = 'internal_scrolloff_echo' },
+        })
+
+        assert.is_nil(window.state().transaction.expected_option_echo)
+
+        window.refresh(0, vim.tbl_extend('force', opts, { _event = 'CursorMoved' }))
+
+        assert.are.same({ scrolloff = true }, window.state().transaction.expected_option_echo.options)
 
         vim.api.nvim_buf_delete(bufnr, { force = true })
     end)

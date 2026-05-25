@@ -14,6 +14,23 @@ describe('marginalia.viewport', function()
         assert.are.same({ 9, 91 }, rows)
     end)
 
+    it('does not fall back to outer context when the innermost row is too tall', function()
+        local candidates = context_normalize.candidates({
+            { row = 1, type = 'outer' },
+            { row = 91, type = 'inner' },
+        }, 100)
+
+        local rows = viewport.allocate_context_rows(candidates, 1, function(row)
+            if row == 91 then
+                return 2
+            end
+
+            return 1
+        end)
+
+        assert.are.same({}, rows)
+    end)
+
     it('shrinks context to preserve adjacent physical cursor motion', function()
         local candidates = context_normalize.candidates({
             { row = 1, type = 'outer' },
@@ -172,6 +189,62 @@ describe('marginalia.viewport', function()
         assert.are.same({ 1, 10, 12, 13, 14, 15, 16, 17, 18, 19, 20 }, projection.visible_rows)
     end)
 
+    it('keeps mouse scroll moving when the requested body viewport crosses context rows', function()
+        local candidates = context_normalize.candidates({
+            { row = 1, type = 'outer' },
+            { row = 9, type = 'middle' },
+            { row = 222, type = 'inner' },
+        }, 224)
+
+        local projection = viewport.project({
+            cursor_row = 224,
+            line_count = 320,
+            winheight = 81,
+            raw_topline = 221,
+            current_physical_row = 4,
+            prior_cursor_row = 224,
+            prior_virtual_topline = 224,
+            logical_scroll_delta = -3,
+            scrolloff = 0,
+            candidates = candidates,
+            event = 'MouseScrolled',
+        })
+
+        assert.are.equal('logical_scroll', projection.reason)
+        assert.are.same({ 1, 9 }, projection.context_rows)
+        assert.are.equal(221, projection.virtual_viewport.topline)
+        assert.are.equal(6, projection.cursor_physical_row)
+        assert.are.same({ 1, 9, 221, 222, 223, 224 }, projection.visible_rows)
+    end)
+
+    it('continues mouse scroll from a logically scrolled viewport instead of the physical context topline', function()
+        local candidates = context_normalize.candidates({
+            { row = 1, type = 'outer' },
+            { row = 9, type = 'middle' },
+            { row = 222, type = 'inner' },
+        }, 224)
+
+        local projection = viewport.project({
+            cursor_row = 224,
+            line_count = 320,
+            winheight = 81,
+            raw_topline = 1,
+            current_physical_row = 7,
+            prior_cursor_row = 224,
+            prior_virtual_topline = 221,
+            logical_scroll_delta = -3,
+            scrolloff = 0,
+            candidates = candidates,
+            event = 'MouseScrolled',
+        })
+
+        assert.are.equal('logical_scroll', projection.reason)
+        assert.are.same({ 1, 9 }, projection.context_rows)
+        assert.are.equal(218, projection.virtual_viewport.topline)
+        assert.are.equal(9, projection.cursor_physical_row)
+        assert.are.same({ 1, 9, 218, 219, 220, 221, 222, 223, 224 }, projection.visible_rows)
+    end)
+
     it('respects scrolloff near the top of the buffer', function()
         local candidates = context_normalize.candidates({
             { row = 1, type = 'outer' },
@@ -279,7 +352,7 @@ describe('marginalia.viewport', function()
         assert.are.same({ 1, 2, 3, 4 }, projection.visible_rows)
     end)
 
-    it('does not spend native linewise scroll rows on context', function()
+    it('still pins context when native linewise movement scrolls the body viewport', function()
         local candidates = context_normalize.candidates({
             { row = 1, type = 'outer' },
             { row = 3, type = 'inner' },
@@ -301,9 +374,63 @@ describe('marginalia.viewport', function()
 
         assert.are.equal('linewise_cursor_motion', projection.reason)
         assert.are.equal(3, projection.cursor_physical_row)
-        assert.are.same({}, projection.context_rows)
-        assert.are.equal(2, projection.virtual_viewport.topline)
-        assert.are.same({ 2, 3, 4 }, projection.visible_rows)
+        assert.are.same({ 1 }, projection.context_rows)
+        assert.are.equal(3, projection.virtual_viewport.topline)
+        assert.are.same({ 1, 3, 4 }, projection.visible_rows)
+    end)
+
+    it('pins available ancestors during linewise down movement at the bottom of the viewport', function()
+        local candidates = context_normalize.candidates({
+            { row = 1, type = 'outer' },
+            { row = 9, type = 'middle' },
+            { row = 83, type = 'inner' },
+        }, 86)
+
+        local projection = viewport.project({
+            cursor_row = 86,
+            line_count = 217,
+            winheight = 78,
+            raw_topline = 12,
+            current_physical_row = 78,
+            prior_cursor_row = 85,
+            prior_native_physical_row = 77,
+            prior_virtual_topline = 11,
+            scrolloff = 0,
+            candidates = candidates,
+            event = 'CursorMoved',
+        })
+
+        assert.are.equal('linewise_cursor_motion', projection.reason)
+        assert.are.equal(78, projection.cursor_physical_row)
+        assert.are.same({ 1, 9 }, projection.context_rows)
+        assert.are.equal(11, projection.virtual_viewport.topline)
+    end)
+
+    it('keeps context available during linewise up movement at the bottom of the viewport', function()
+        local candidates = context_normalize.candidates({
+            { row = 1, type = 'outer' },
+            { row = 9, type = 'middle' },
+            { row = 79, type = 'inner' },
+        }, 81)
+
+        local projection = viewport.project({
+            cursor_row = 81,
+            line_count = 217,
+            winheight = 78,
+            raw_topline = 9,
+            current_physical_row = 73,
+            prior_cursor_row = 82,
+            prior_native_physical_row = 78,
+            prior_virtual_topline = 11,
+            scrolloff = 0,
+            candidates = candidates,
+            event = 'CursorMoved',
+        })
+
+        assert.are.equal('linewise_cursor_motion', projection.reason)
+        assert.are.equal(77, projection.cursor_physical_row)
+        assert.are.same({ 1 }, projection.context_rows)
+        assert.are.equal(6, projection.virtual_viewport.topline)
     end)
 
     it('preserves semantic context change as the projection reason', function()
@@ -334,5 +461,33 @@ describe('marginalia.viewport', function()
 
         assert.are.equal('linewise_cursor_motion', projection.reason)
         assert.are.equal(12, projection.cursor_physical_row)
+    end)
+
+    it('accounts for wrapped body rows when projecting the virtual viewport', function()
+        local candidates = context_normalize.candidates({
+            { row = 1, type = 'outer' },
+            { row = 9, type = 'middle' },
+            { row = 91, type = 'inner' },
+        }, 100)
+
+        local projection = viewport.project({
+            cursor_row = 100,
+            line_count = 120,
+            winheight = 20,
+            raw_topline = 96,
+            current_physical_row = 6,
+            scrolloff = 0,
+            candidates = candidates,
+            row_height = function(row)
+                if row == 98 or row == 99 then
+                    return 2
+                end
+
+                return 1
+            end,
+        })
+
+        assert.are.same({ 1, 9, 91 }, projection.context_rows)
+        assert.are.equal(99, projection.virtual_viewport.topline)
     end)
 end)

@@ -81,4 +81,39 @@ describe('marginalia.window.planner', function()
             effective = 5,
         }, projection.scrolloff)
     end)
+
+    it('threads logical mouse scroll deltas into viewport projection', function()
+        local projection = planner.project({
+            snapshot = {
+                cursor_row = 224,
+                line_count = 320,
+                winheight = 81,
+                raw_view = { topline = 1 },
+                native_winline = 7,
+                wrap = true,
+                window_scrolloff = 0,
+            },
+            state = {
+                cursor = {
+                    row = 224,
+                    physical_row = 6,
+                    native_physical_row = 6,
+                },
+                viewport = {
+                    logical_topline = 221,
+                },
+            },
+            context_frames = {
+                { row = 1, type = 'outer' },
+                { row = 9, type = 'middle' },
+                { row = 222, type = 'inner' },
+            },
+            event = 'MouseScrolled',
+            logical_scroll_delta = -3,
+        })
+
+        assert.are.equal('logical_scroll', projection.reason)
+        assert.are.same({ 1, 9 }, projection.context_rows)
+        assert.are.equal(218, projection.virtual_viewport.topline)
+    end)
 end)

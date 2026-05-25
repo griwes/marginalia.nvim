@@ -103,11 +103,20 @@ end
 local function is_matching_scroll_echo(opts)
     local expected = opts.expected_scroll_echo
 
-    return opts.events.WinScrolled == true
-        and expected ~= nil
-        and expected.epoch == opts.transaction_epoch
-        and expected.cursor_row == opts.cursor_row
-        and expected.raw_topline == opts.raw_topline
+    if
+        opts.events.WinScrolled ~= true
+        or expected == nil
+        or expected.epoch ~= opts.transaction_epoch
+        or expected.cursor_row ~= opts.cursor_row
+    then
+        return false
+    end
+
+    if expected.raw_topline == opts.raw_topline then
+        return true
+    end
+
+    return expected.raw_toplines and expected.raw_toplines[opts.raw_topline] == true
 end
 
 ---@param opts { options: string[], expected_option_echo?: { epoch: integer, options: table<string, true> }, transaction_epoch?: integer }
@@ -158,6 +167,14 @@ function M.classify(opts)
             kind = 'user_intent',
             primary_event = cursor_event,
             planner_event = cursor_event,
+        }
+    end
+
+    if events.MouseScrolled then
+        return {
+            kind = 'user_intent',
+            primary_event = 'MouseScrolled',
+            planner_event = 'MouseScrolled',
         }
     end
 
@@ -231,9 +248,13 @@ end
 ---@param opts { refresh_event?: string, refresh_events?: table<string, true>, cursor_row: integer, raw_topline: integer }
 ---@return marginalia.RefreshEventClassification
 function M.classify_refresh(state, opts)
-    local classification = M.classify({
+    local events = event_set({
         event = opts.refresh_event,
         events = opts.refresh_events,
+    })
+    local classification = M.classify({
+        event = opts.refresh_event,
+        events = events,
         expected_scroll_echo = state.transaction and state.transaction.expected_scroll_echo,
         expected_option_echo = state.transaction and state.transaction.expected_option_echo,
         transaction_epoch = state.transaction and state.transaction.epoch,
@@ -241,16 +262,37 @@ function M.classify_refresh(state, opts)
         raw_topline = opts.raw_topline,
     })
 
-    if
-        classification.kind == 'transaction_echo'
-        or opts.refresh_event == 'WinScrolled'
-        or opts.refresh_event == 'CursorMoved'
-        or opts.refresh_event == 'CursorMovedI'
-    then
-        if state.transaction then
+    if not state.transaction then
+        return classification
+    end
+
+    if classification.kind == 'transaction_echo' then
+        local options = option_events(events)
+
+        if
+            is_matching_scroll_echo({
+                events = events,
+                expected_scroll_echo = state.transaction.expected_scroll_echo,
+                transaction_epoch = state.transaction.epoch,
+                cursor_row = opts.cursor_row,
+                raw_topline = opts.raw_topline,
+            })
+        then
             state.transaction.expected_scroll_echo = nil
+        end
+
+        if
+            is_matching_option_echo({
+                options = options,
+                expected_option_echo = state.transaction.expected_option_echo,
+                transaction_epoch = state.transaction.epoch,
+            })
+        then
             state.transaction.expected_option_echo = nil
         end
+    elseif events.WinScrolled or events.CursorMoved or events.CursorMovedI then
+        state.transaction.expected_scroll_echo = nil
+        state.transaction.expected_option_echo = nil
     end
 
     return classification

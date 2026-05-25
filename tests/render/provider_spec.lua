@@ -70,6 +70,71 @@ describe('marginalia.render.provider', function()
         vim.api.nvim_buf_delete(bufnr, { force = true })
     end)
 
+    it('can prime conceal marks before the next redraw boundary', function()
+        local bufnr = vim.api.nvim_create_buf(false, true)
+        local state = {
+            winid = vim.api.nvim_get_current_win(),
+            bufnr = bufnr,
+            identity = {
+                bufnr = bufnr,
+            },
+        }
+
+        vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { 'one', 'two', 'three', 'four' })
+        render_provider.update_window(state, {
+            { start_row = 2, end_row = 3 },
+        }, {
+            prime = true,
+        })
+
+        local marks = vim.api.nvim_buf_get_extmarks(bufnr, render_provider.namespace(), 0, -1, { details = true })
+
+        assert.are.equal(1, #marks)
+        assert.are.equal(1, marks[1][2])
+        assert.are.equal(2, marks[1][4].end_row)
+
+        assert.is_true(render_provider._on_win('win', state.winid, bufnr))
+        assert.are.equal(1, #vim.api.nvim_buf_get_extmarks(bufnr, render_provider.namespace(), 0, -1, {}))
+
+        assert.is_true(render_provider._on_win('win', state.winid, bufnr))
+        assert.are.same({}, vim.api.nvim_buf_get_extmarks(bufnr, render_provider.namespace(), 0, -1, {}))
+
+        render_provider.clear_window(state)
+        vim.api.nvim_buf_delete(bufnr, { force = true })
+    end)
+
+    it('does not prime buffer-global conceal marks when a buffer is visible in multiple windows', function()
+        local bufnr = vim.api.nvim_create_buf(false, true)
+        local first_winid = vim.api.nvim_get_current_win()
+
+        vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { 'one', 'two', 'three', 'four' })
+        vim.api.nvim_win_set_buf(first_winid, bufnr)
+        vim.cmd.vsplit()
+        local second_winid = vim.api.nvim_get_current_win()
+        vim.api.nvim_win_set_buf(second_winid, bufnr)
+        vim.api.nvim_set_current_win(first_winid)
+
+        local state = {
+            winid = first_winid,
+            bufnr = bufnr,
+            identity = {
+                bufnr = bufnr,
+            },
+        }
+
+        render_provider.update_window(state, {
+            { start_row = 2, end_row = 3 },
+        }, {
+            prime = true,
+        })
+
+        assert.are.same({}, vim.api.nvim_buf_get_extmarks(bufnr, render_provider.namespace(), 0, -1, {}))
+
+        render_provider.clear_window(state)
+        vim.api.nvim_win_close(second_winid, true)
+        vim.api.nvim_buf_delete(bufnr, { force = true })
+    end)
+
     it('does not materialize provider marks for non-matching windows or buffers', function()
         local bufnr = vim.api.nvim_create_buf(false, true)
         local other_bufnr = vim.api.nvim_create_buf(false, true)

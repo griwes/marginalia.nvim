@@ -8,6 +8,7 @@ local installed = false
 ---@field hidden_ranges marginalia.HiddenRange[]
 ---@field priority integer
 ---@field checked table<integer, true>
+---@field primed boolean?
 
 ---@type table<integer, marginalia.RenderProviderWindow>
 local windows = {}
@@ -17,6 +18,24 @@ local function clear_buffer(bufnr)
     if vim.api.nvim_buf_is_valid(bufnr) then
         vim.api.nvim_buf_clear_namespace(bufnr, ns, 0, -1)
     end
+end
+
+---@param bufnr integer
+---@return boolean
+local function buffer_is_not_shared_across_windows(bufnr)
+    local count = 0
+
+    for _, winid in ipairs(vim.api.nvim_list_wins()) do
+        if vim.api.nvim_win_is_valid(winid) and vim.api.nvim_win_get_buf(winid) == bufnr then
+            count = count + 1
+
+            if count > 1 then
+                return false
+            end
+        end
+    end
+
+    return true
 end
 
 ---@param range marginalia.HiddenRange
@@ -63,6 +82,17 @@ local function materialize_conceal(entry, row)
     })
 end
 
+---@param entry marginalia.RenderProviderWindow
+local function materialize_all(entry)
+    for _, range in ipairs(entry.hidden_ranges) do
+        materialize_conceal(entry, range.start_row - 1)
+
+        for row = range.start_row - 1, range.end_row - 1 do
+            entry.checked[row] = true
+        end
+    end
+end
+
 ---@param _ string
 ---@param winid integer
 ---@param bufnr integer
@@ -83,14 +113,19 @@ end
 ---@param bufnr integer
 ---@return boolean
 function M._on_win(_, winid, bufnr)
-    clear_buffer(bufnr)
-
     local entry = windows[winid]
 
     if not entry or entry.bufnr ~= bufnr or #entry.hidden_ranges == 0 then
+        clear_buffer(bufnr)
         return false
     end
 
+    if entry.primed then
+        entry.primed = false
+        return true
+    end
+
+    clear_buffer(bufnr)
     entry.checked = {}
     return true
 end
@@ -109,7 +144,7 @@ end
 
 ---@param state marginalia.WindowState
 ---@param ranges marginalia.HiddenRange[]
----@param opts? { priority?: integer }
+---@param opts? { priority?: integer, prime?: boolean }
 function M.update_window(state, ranges, opts)
     M.install()
     opts = opts or {}
@@ -121,7 +156,13 @@ function M.update_window(state, ranges, opts)
         hidden_ranges = vim.deepcopy(ranges or {}),
         priority = opts.priority or 200,
         checked = {},
+        primed = false,
     }
+
+    if opts.prime and buffer_is_not_shared_across_windows(state.bufnr) then
+        materialize_all(windows[state.winid])
+        windows[state.winid].primed = true
+    end
 
     vim.api.nvim__redraw({ buf = state.bufnr, valid = false, flush = false })
 end
