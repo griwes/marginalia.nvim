@@ -416,7 +416,7 @@ function M.project_context_and_body(opts)
     return context_rows, selected_candidates, body_topline, body_botline
 end
 
----@param opts { cursor_row: integer, line_count: integer, winheight: integer, raw_topline: integer, current_physical_row?: integer, prior_cursor_row?: integer, prior_physical_row?: integer, prior_virtual_topline?: integer, logical_scroll_delta?: integer, effective_scrolloff?: integer, scrolloff?: integer, event?: string, candidates?: marginalia.ViewportCandidate[], row_height?: table<integer, integer>|marginalia.RowHeightProvider }
+---@param opts { cursor_row: integer, line_count: integer, winheight: integer, raw_topline: integer, current_physical_row?: integer, prior_cursor_row?: integer, prior_physical_row?: integer, prior_raw_topline?: integer, prior_virtual_topline?: integer, logical_scroll_delta?: integer, effective_scrolloff?: integer, scrolloff?: integer, event?: string, candidates?: marginalia.ViewportCandidate[], row_height?: table<integer, integer>|marginalia.RowHeightProvider }
 ---@return string
 local function reason(opts)
     if opts.event == 'MouseScrolled' and opts.logical_scroll_delta then
@@ -469,12 +469,20 @@ local function project_logical_scroll(opts)
     return context_rows, selected_candidates, body_topline, body_botline, cursor_physical_row
 end
 
----@param opts { cursor_row: integer, line_count: integer, winheight: integer, raw_topline: integer, current_physical_row?: integer, prior_cursor_row?: integer, prior_physical_row?: integer, prior_native_physical_row?: integer, effective_scrolloff?: integer, scrolloff?: integer, reason: string, wrap?: boolean }
+---@param opts { cursor_row: integer, line_count: integer, winheight: integer, raw_topline: integer, current_physical_row?: integer, prior_cursor_row?: integer, prior_physical_row?: integer, prior_native_physical_row?: integer, forced_cursor_physical_row?: integer, effective_scrolloff?: integer, scrolloff?: integer, reason: string, wrap?: boolean }
 ---@return integer
 local function projected_cursor_physical_row(opts)
     local scrolloff = math.max(0, opts.effective_scrolloff or opts.scrolloff or 0)
     local native_physical_row = opts.current_physical_row
         or clamp(opts.cursor_row - opts.raw_topline + 1, 1, opts.winheight)
+
+    if opts.forced_cursor_physical_row then
+        return clamp(opts.forced_cursor_physical_row, 1, opts.winheight)
+    end
+
+    if opts.reason == 'explicit_scroll' and opts.prior_cursor_row == opts.cursor_row and opts.prior_physical_row then
+        return clamp(opts.prior_physical_row, 1, opts.winheight)
+    end
 
     if
         opts.wrap
@@ -494,7 +502,7 @@ local function projected_cursor_physical_row(opts)
     return clamp(desired, math.max(1, minimum), math.max(1, maximum))
 end
 
----@param opts { cursor_row: integer, line_count: integer, winheight: integer, raw_topline: integer, current_physical_row?: integer, prior_cursor_row?: integer, prior_physical_row?: integer, prior_native_physical_row?: integer, prior_virtual_topline?: integer, logical_scroll_delta?: integer, user_scrolloff?: integer, effective_scrolloff?: integer, scrolloff?: integer, event?: string, candidates?: marginalia.ViewportCandidate[], wrap?: boolean, row_height?: table<integer, integer>|marginalia.RowHeightProvider }
+---@param opts { cursor_row: integer, line_count: integer, winheight: integer, raw_topline: integer, current_physical_row?: integer, prior_cursor_row?: integer, prior_physical_row?: integer, prior_native_physical_row?: integer, prior_raw_topline?: integer, prior_virtual_topline?: integer, logical_scroll_delta?: integer, forced_cursor_physical_row?: integer, user_scrolloff?: integer, effective_scrolloff?: integer, scrolloff?: integer, event?: string, candidates?: marginalia.ViewportCandidate[], wrap?: boolean, row_height?: table<integer, integer>|marginalia.RowHeightProvider }
 ---@return marginalia.ViewportProjection
 function M.project(opts)
     local effective_scrolloff = math.max(0, opts.effective_scrolloff or opts.scrolloff or 0)
@@ -506,14 +514,25 @@ function M.project(opts)
     local body_topline
     local body_botline
 
-    if projection_reason == 'logical_scroll' then
+    local explicit_scroll_delta = nil
+
+    if
+        projection_reason == 'explicit_scroll'
+        and opts.prior_virtual_topline
+        and opts.prior_raw_topline
+        and opts.raw_topline ~= opts.prior_raw_topline
+    then
+        explicit_scroll_delta = opts.raw_topline - opts.prior_raw_topline
+    end
+
+    if projection_reason == 'logical_scroll' or explicit_scroll_delta then
         context_rows, selected_candidates, body_topline, body_botline, cursor_physical_row = project_logical_scroll({
             cursor_row = opts.cursor_row,
             line_count = opts.line_count,
             winheight = opts.winheight,
             raw_topline = opts.raw_topline,
             prior_virtual_topline = opts.prior_virtual_topline,
-            logical_scroll_delta = opts.logical_scroll_delta or 0,
+            logical_scroll_delta = explicit_scroll_delta or opts.logical_scroll_delta or 0,
             candidates = opts.candidates or {},
             row_height = opts.row_height,
         })
@@ -527,6 +546,7 @@ function M.project(opts)
             prior_cursor_row = opts.prior_cursor_row,
             prior_physical_row = opts.prior_physical_row,
             prior_native_physical_row = opts.prior_native_physical_row,
+            forced_cursor_physical_row = opts.forced_cursor_physical_row,
             effective_scrolloff = effective_scrolloff,
             reason = projection_reason,
             wrap = opts.wrap,

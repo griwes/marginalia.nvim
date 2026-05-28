@@ -1,10 +1,10 @@
 local M = {}
 
-local ns = vim.api.nvim_create_namespace('marginalia.provider.conceal')
-local installed = false
+local fallback_ns = vim.api.nvim_create_namespace('marginalia.provider.conceal')
 
 ---@class marginalia.RenderProviderWindow
 ---@field bufnr integer
+---@field ns integer
 ---@field hidden_ranges marginalia.HiddenRange[]
 ---@field priority integer
 ---@field checked table<integer, true>
@@ -13,79 +13,84 @@ local installed = false
 ---@type table<integer, marginalia.RenderProviderWindow>
 local windows = {}
 
+local unsupported_reason = 'nvim__ns_set is unavailable; per-window conceal is disabled'
+
+---@param winid integer
+---@return boolean
+local function valid_win(winid)
+    return type(winid) == 'number' and vim.api.nvim_win_is_valid(winid)
+end
+
+---@param state marginalia.WindowState|table
+---@return integer
+local function namespace_for_state(state)
+    if type(state.ns) == 'number' then
+        return state.ns
+    end
+
+    local entry = windows[state.winid]
+
+    if entry and entry.ns then
+        return entry.ns
+    end
+
+    return vim.api.nvim_create_namespace('marginalia.provider.conceal.win.' .. tostring(state.winid))
+end
+
+---@return boolean, string?
+function M.supported()
+    if type(vim.api.nvim__ns_set) ~= 'function' then
+        return false, unsupported_reason
+    end
+
+    return true, nil
+end
+
+---@param ns integer
+---@param winid integer
+---@return boolean
+local function scope_namespace(ns, winid)
+    if not valid_win(winid) then
+        return false
+    end
+
+    vim.api.nvim__ns_set(ns, { wins = { winid } })
+    return true
+end
+
 ---@param bufnr integer
-local function clear_buffer(bufnr)
+---@param ns integer
+local function clear_namespace(bufnr, ns)
     if vim.api.nvim_buf_is_valid(bufnr) then
         vim.api.nvim_buf_clear_namespace(bufnr, ns, 0, -1)
     end
 end
 
 ---@param bufnr integer
----@return boolean
-local function buffer_is_not_shared_across_windows(bufnr)
-    local count = 0
-
-    for _, winid in ipairs(vim.api.nvim_list_wins()) do
-        if vim.api.nvim_win_is_valid(winid) and vim.api.nvim_win_get_buf(winid) == bufnr then
-            count = count + 1
-
-            if count > 1 then
-                return false
-            end
-        end
-    end
-
-    return true
-end
-
+---@param ns integer
 ---@param range marginalia.HiddenRange
----@param row integer zero-based row
----@return boolean
-local function range_contains_row(range, row)
+---@param priority integer
+local function materialize_range(bufnr, ns, range, priority)
     if range.start_row > range.end_row then
-        return false
-    end
-
-    local one_based_row = row + 1
-
-    return one_based_row >= range.start_row and one_based_row <= range.end_row
-end
-
----@param entry marginalia.RenderProviderWindow
----@param row integer zero-based row
----@return marginalia.HiddenRange?
-local function hidden_range_for_row(entry, row)
-    for _, range in ipairs(entry.hidden_ranges) do
-        if range_contains_row(range, row) then
-            return range
-        end
-    end
-
-    return nil
-end
-
----@param entry marginalia.RenderProviderWindow
----@param row integer zero-based row
-local function materialize_conceal(entry, row)
-    local range = hidden_range_for_row(entry, row)
-
-    if not range then
         return
     end
 
-    vim.api.nvim_buf_set_extmark(entry.bufnr, ns, range.start_row - 1, 0, {
+    vim.api.nvim_buf_set_extmark(bufnr, ns, range.start_row - 1, 0, {
         end_row = range.end_row - 1,
         end_col = -1,
         strict = false,
         conceal_lines = '',
-        priority = entry.priority,
+        priority = priority,
     })
 end
 
 ---@param entry marginalia.RenderProviderWindow
 local function materialize_all(entry)
+    clear_namespace(entry.bufnr, entry.ns)
+    entry.checked = {}
+
     for _, range in ipairs(entry.hidden_ranges) do
-        materialize_conceal(entry, range.start_row - 1)
+        materialize_range(entry.bufnr, entry.ns, range, entry.priority)
 
         for row = range.start_row - 1, range.end_row - 1 do
             entry.checked[row] = true
@@ -93,88 +98,99 @@ local function materialize_all(entry)
     end
 end
 
----@param _ string
----@param winid integer
----@param bufnr integer
----@param row integer
-function M._on_conceal_line(_, winid, bufnr, row)
-    local entry = windows[winid]
-
-    if not entry or entry.bufnr ~= bufnr or entry.checked[row] then
-        return
-    end
-
-    entry.checked[row] = true
-    materialize_conceal(entry, row)
-end
-
----@param _ string
----@param winid integer
----@param bufnr integer
----@return boolean
-function M._on_win(_, winid, bufnr)
-    local entry = windows[winid]
-
-    if not entry or entry.bufnr ~= bufnr or #entry.hidden_ranges == 0 then
-        clear_buffer(bufnr)
-        return false
-    end
-
-    if entry.primed then
-        entry.primed = false
-        return true
-    end
-
-    clear_buffer(bufnr)
-    entry.checked = {}
-    return true
-end
-
+---@return boolean, string?
 function M.install()
-    if installed then
-        return
+    local supported, reason = M.supported()
+
+    if not supported then
+        local notify = vim.notify_once or vim.notify
+
+        notify(reason, vim.log.levels.ERROR, { title = 'marginalia.nvim' })
+        return false, reason
     end
 
-    vim.api.nvim_set_decoration_provider(ns, {
-        on_win = M._on_win,
-        _on_conceal_line = M._on_conceal_line,
-    })
-    installed = true
+    return true, nil
 end
 
 ---@param state marginalia.WindowState
 ---@param ranges marginalia.HiddenRange[]
 ---@param opts? { priority?: integer, prime?: boolean }
+---@return boolean, string?
 function M.update_window(state, ranges, opts)
-    M.install()
+    local supported, reason = M.install()
+
+    if not supported then
+        local previous = windows[state.winid]
+
+        if previous then
+            clear_namespace(previous.bufnr, previous.ns)
+        end
+
+        clear_namespace(state.bufnr, namespace_for_state(state))
+        windows[state.winid] = nil
+        return false, reason
+    end
+
     opts = opts or {}
 
-    clear_buffer(state.bufnr)
+    local ns = namespace_for_state(state)
+    local previous = windows[state.winid]
+
+    if previous then
+        clear_namespace(previous.bufnr, previous.ns)
+    end
+
+    if not scope_namespace(ns, state.winid) then
+        clear_namespace(state.bufnr, ns)
+        windows[state.winid] = nil
+        return false, 'invalid_window'
+    end
 
     windows[state.winid] = {
         bufnr = state.bufnr,
+        ns = ns,
         hidden_ranges = vim.deepcopy(ranges or {}),
         priority = opts.priority or 200,
         checked = {},
-        primed = false,
+        primed = true,
     }
 
-    if opts.prime and buffer_is_not_shared_across_windows(state.bufnr) then
-        materialize_all(windows[state.winid])
-        windows[state.winid].primed = true
+    materialize_all(windows[state.winid])
+
+    if type(vim.api.nvim__redraw) == 'function' then
+        vim.api.nvim__redraw({ buf = state.bufnr, valid = false, flush = false })
+    else
+        vim.cmd.redraw()
     end
 
-    vim.api.nvim__redraw({ buf = state.bufnr, valid = false, flush = false })
+    return true, nil
+end
+
+---@param state marginalia.WindowState|table
+---@param bufnr? integer
+function M.clear_window_marks(state, bufnr)
+    local ns = namespace_for_state(state)
+    clear_namespace(bufnr or state.bufnr, ns)
+
+    local entry = windows[state.winid]
+
+    if entry then
+        entry.checked = {}
+    end
 end
 
 ---@param state marginalia.WindowState
 function M.clear_window(state)
-    windows[state.winid] = nil
-    clear_buffer(state.bufnr)
+    local entry = windows[state.winid]
+    local ns = entry and entry.ns or namespace_for_state(state)
+
+    clear_namespace(state.bufnr, ns)
 
     if state.identity and state.identity.bufnr and state.identity.bufnr ~= state.bufnr then
-        clear_buffer(state.identity.bufnr)
+        clear_namespace(state.identity.bufnr, ns)
     end
+
+    windows[state.winid] = nil
 end
 
 ---@param winid integer
@@ -182,7 +198,7 @@ function M.remove_window(winid)
     local entry = windows[winid]
 
     if entry then
-        clear_buffer(entry.bufnr)
+        clear_namespace(entry.bufnr, entry.ns)
     end
 
     windows[winid] = nil
@@ -190,12 +206,32 @@ end
 
 ---@param bufnr integer
 function M.clear_buffer(bufnr)
-    clear_buffer(bufnr)
+    for _, entry in pairs(windows) do
+        if entry.bufnr == bufnr then
+            clear_namespace(bufnr, entry.ns)
+            entry.checked = {}
+        end
+    end
+
+    clear_namespace(bufnr, fallback_ns)
 end
 
+---@param state_or_winid? marginalia.WindowState|integer
 ---@return integer
-function M.namespace()
-    return ns
+function M.namespace(state_or_winid)
+    if type(state_or_winid) == 'table' then
+        return namespace_for_state(state_or_winid)
+    end
+
+    if type(state_or_winid) == 'number' then
+        local entry = windows[state_or_winid]
+
+        if entry then
+            return entry.ns
+        end
+    end
+
+    return fallback_ns
 end
 
 ---@param winid integer
@@ -209,9 +245,11 @@ function M.debug_window(winid)
 
     return {
         bufnr = entry.bufnr,
+        ns = entry.ns,
         hidden_ranges = vim.deepcopy(entry.hidden_ranges),
         priority = entry.priority,
         checked = vim.deepcopy(entry.checked),
+        primed = entry.primed,
     }
 end
 

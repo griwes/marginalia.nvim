@@ -1,11 +1,11 @@
 # Marginalia
 
 > [!WARNING]
-> Marginalia currently depends on Neovim's internal `_on_conceal_line`
-> decoration-provider hook to make whole-line conceal behave like window-local
-> viewport state. This hook is not a stable public API and may change or break
-> across Neovim versions. Treat the plugin as experimental until Neovim exposes
-> a stable per-window line-conceal primitive.
+> Marginalia currently depends on Neovim's experimental `nvim__ns_set()` API
+> to scope `conceal_lines` extmarks to one window. The API may change or
+> disappear across Neovim versions. When it is unavailable, Marginalia safely
+> disables conceal rendering rather than leaking conceal state into other
+> windows.
 
 Context-preserving Neovim editing experiments built around hiding irrelevant
 lines instead of mirroring context into a floating overlay.
@@ -13,9 +13,8 @@ lines instead of mirroring context into a floating overlay.
 ## Status
 
 Early development. The current MVP selects Tree-sitter context frames, projects
-visible rows plus conceal ranges, and lazily materializes Neovim
-`conceal_lines` extmarks through a decoration provider while attached windows
-redraw.
+visible rows plus conceal ranges, and directly materializes window-scoped
+Neovim `conceal_lines` extmarks for attached windows.
 
 ## Current API
 

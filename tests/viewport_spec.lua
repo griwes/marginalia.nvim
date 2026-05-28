@@ -245,6 +245,34 @@ describe('marginalia.viewport', function()
         assert.are.same({ 1, 9, 218, 219, 220, 221, 222, 223, 224 }, projection.visible_rows)
     end)
 
+    it('preserves context capacity during explicit scroll over a concealed viewport', function()
+        local candidates = context_normalize.candidates({
+            { row = 1, type = 'outer' },
+            { row = 3, type = 'inner' },
+        }, 4)
+
+        local projection = viewport.project({
+            cursor_row = 4,
+            line_count = 100,
+            winheight = 81,
+            raw_topline = 2,
+            current_physical_row = 2,
+            prior_cursor_row = 4,
+            prior_physical_row = 3,
+            prior_raw_topline = 1,
+            prior_virtual_topline = 3,
+            scrolloff = 0,
+            candidates = candidates,
+            event = 'WinScrolled',
+        })
+
+        assert.are.equal('explicit_scroll', projection.reason)
+        assert.are.equal(3, projection.cursor_physical_row)
+        assert.are.same({ 1, 3 }, projection.context_rows)
+        assert.are.equal(4, projection.virtual_viewport.topline)
+        assert.are.same({ 1, 3, 4 }, projection.visible_rows)
+    end)
+
     it('respects scrolloff near the top of the buffer', function()
         local candidates = context_normalize.candidates({
             { row = 1, type = 'outer' },

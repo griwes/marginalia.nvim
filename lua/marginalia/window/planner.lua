@@ -40,7 +40,7 @@ local function row_height_provider(snapshot)
     end
 end
 
----@param opts { snapshot: marginalia.WindowSnapshot, state?: marginalia.WindowState|table, context_frames?: marginalia.ContextFrame[], scrolloff?: integer, event?: string, logical_scroll_delta?: integer }
+---@param opts { snapshot: marginalia.WindowSnapshot, state?: marginalia.WindowState|table, context_frames?: marginalia.ContextFrame[], scrolloff?: integer, event?: string, logical_scroll_delta?: integer, forced_cursor_physical_row?: integer }
 ---@return marginalia.ViewportProjection
 function M.project(opts)
     local snapshot = opts.snapshot
@@ -56,8 +56,10 @@ function M.project(opts)
         prior_cursor_row = state.cursor and state.cursor.row or nil,
         prior_physical_row = state.cursor and state.cursor.physical_row or nil,
         prior_native_physical_row = state.cursor and state.cursor.native_physical_row or nil,
+        prior_raw_topline = state.viewport and state.viewport.raw_topline or nil,
         prior_virtual_topline = state.viewport and state.viewport.logical_topline or nil,
         logical_scroll_delta = opts.logical_scroll_delta,
+        forced_cursor_physical_row = opts.forced_cursor_physical_row,
         user_scrolloff = snapshot.window_scrolloff,
         effective_scrolloff = opts.scrolloff or 0,
         event = opts.event,

@@ -31,6 +31,7 @@ local M = {}
 ---@field row? integer
 ---@field physical_row? integer
 ---@field native_physical_row? integer
+---@field jumplist? marginalia.WindowJumplistSnapshot
 
 ---@class marginalia.WindowSemanticState
 ---@field context? marginalia.ContextResult
@@ -208,14 +209,16 @@ end
 ---@param cursor_row integer
 ---@param winline? integer
 ---@param native_winline? integer
-function M.record_cursor_row(state, cursor_row, winline, native_winline)
+---@param jumplist? marginalia.WindowJumplistSnapshot
+function M.record_cursor_row(state, cursor_row, winline, native_winline, jumplist)
     state.cursor.row = cursor_row
     state.cursor.physical_row = winline or vim.fn.winline()
     state.cursor.native_physical_row = native_winline or state.cursor.physical_row
+    state.cursor.jumplist = jumplist
 end
 
 ---@param state marginalia.WindowState
----@param opts { plan: table, context_topline?: integer, logical_topline: integer, raw_topline: integer, previous_raw_topline?: integer, post_apply_view: table, cursor_row: integer, cursor_winline: integer, native_cursor_winline?: integer, scrolloff?: table }
+---@param opts { plan: table, context_topline?: integer, logical_topline: integer, raw_topline: integer, previous_raw_topline?: integer, post_apply_view: table, cursor_row: integer, cursor_winline: integer, native_cursor_winline?: integer, scrolloff?: table, jumplist?: marginalia.WindowJumplistSnapshot }
 function M.record_apply_result(state, opts)
     local plan = opts.plan
 
@@ -234,7 +237,7 @@ function M.record_apply_result(state, opts)
     }
     state.viewport.post_apply_view = opts.post_apply_view
 
-    M.record_cursor_row(state, opts.cursor_row, opts.cursor_winline, opts.native_cursor_winline)
+    M.record_cursor_row(state, opts.cursor_row, opts.cursor_winline, opts.native_cursor_winline, opts.jumplist)
 
     state.transaction.expected_scroll_echo = {
         epoch = state.transaction.epoch,
@@ -258,14 +261,14 @@ function M.record_apply_result(state, opts)
 end
 
 ---@param state marginalia.WindowState
----@param opts { raw_topline: integer, cursor_row: integer, cursor_winline: integer, native_cursor_winline?: integer, post_apply_view: table }
+---@param opts { raw_topline: integer, cursor_row: integer, cursor_winline: integer, native_cursor_winline?: integer, post_apply_view: table, jumplist?: marginalia.WindowJumplistSnapshot }
 function M.record_scroll_echo_reassertion(state, opts)
     local epoch = state.transaction.epoch
 
     state.viewport.raw_topline = opts.raw_topline
     state.viewport.post_apply_view = opts.post_apply_view
 
-    M.record_cursor_row(state, opts.cursor_row, opts.cursor_winline, opts.native_cursor_winline)
+    M.record_cursor_row(state, opts.cursor_row, opts.cursor_winline, opts.native_cursor_winline, opts.jumplist)
 
     state.transaction.scroll_echo_reasserted_epoch = epoch
     state.transaction.expected_scroll_echo = {
@@ -288,10 +291,10 @@ function M.record_scroll_echo_reassertion(state, opts)
 end
 
 ---@param state marginalia.WindowState
----@param opts { cursor_row: integer, raw_topline: integer }
+---@param opts { cursor_row: integer, raw_topline: integer, jumplist?: marginalia.WindowJumplistSnapshot }
 function M.record_empty_result(state, opts)
     state.render.plan = { visible_rows = {}, hidden_ranges = {} }
-    M.record_cursor_row(state, opts.cursor_row)
+    M.record_cursor_row(state, opts.cursor_row, nil, nil, opts.jumplist)
     state.viewport.raw_topline = opts.raw_topline
 end
 

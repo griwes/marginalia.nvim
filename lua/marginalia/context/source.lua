@@ -4,22 +4,22 @@ local M = {}
 
 ---@class marginalia.ContextTreeCache
 ---@field bufnr integer
----@field lang? string
+---@field lang string
 ---@field changedtick integer
----@field trees table<integer, TSTree>
+---@field trees? table<integer, TSTree>
 ---@field parser vim.treesitter.LanguageTree
----@field context_query marginalia.ContextQuery?
 ---@field pending_generation? integer
 ---@field generation integer
+---@field subscribers table<any, fun(bufnr: integer)>
 
 ---@type table<string, marginalia.ContextTreeCache>
 local cache = {}
 
 ---@param bufnr integer
----@param lang? string
+---@param lang string
 ---@return string
 local function cache_key(bufnr, lang)
-    return tostring(bufnr) .. ':' .. (lang or '')
+    return tostring(bufnr) .. ':' .. lang
 end
 
 ---@param bufnr integer
@@ -29,21 +29,72 @@ local function changedtick(bufnr)
 end
 
 ---@param parser vim.treesitter.LanguageTree?
+---@param fallback? string
+---@return string?
+local function parser_lang(parser, fallback)
+    if parser and type(parser.lang) == 'function' then
+        local ok, lang = pcall(function()
+            return parser:lang()
+        end)
+
+        if ok and type(lang) == 'string' and lang ~= '' then
+            return lang
+        end
+    end
+
+    if type(fallback) == 'string' and fallback ~= '' then
+        return fallback
+    end
+
+    return nil
+end
+
+---@param row integer
+---@param col integer
+---@return integer[]
+local function cursor_range(row, col)
+    return { row, col, row, col }
+end
+
+---@param parser vim.treesitter.LanguageTree
+---@param row integer
+---@param col integer
+---@return vim.treesitter.LanguageTree
+local function language_tree_at(parser, row, col)
+    if type(parser.language_for_range) ~= 'function' then
+        return parser
+    end
+
+    local ok, language_tree = pcall(parser.language_for_range, parser, cursor_range(row, col))
+
+    if ok and language_tree then
+        return language_tree
+    end
+
+    return parser
+end
+
+---@param language_tree vim.treesitter.LanguageTree
+---@param fallback table<integer, TSTree>
+---@return table<integer, TSTree>
+local function language_trees(language_tree, fallback)
+    if type(language_tree.trees) == 'function' then
+        local ok, trees = pcall(language_tree.trees, language_tree)
+
+        if ok and trees and trees[1] then
+            return trees
+        end
+    end
+
+    return fallback
+end
+
+---@param parser vim.treesitter.LanguageTree?
 ---@param bufnr integer
 ---@param requested_lang? string
 ---@return marginalia.ContextQuery?
 function M.context_query_for(parser, bufnr, requested_lang)
-    local lang = requested_lang
-
-    if not lang and parser and type(parser.lang) == 'function' then
-        local ok, parser_lang = pcall(function()
-            return parser:lang()
-        end)
-
-        if ok then
-            lang = parser_lang
-        end
-    end
+    local lang = parser_lang(parser, requested_lang)
 
     if not lang or lang == '' then
         lang = vim.bo[bufnr].filetype
@@ -63,26 +114,50 @@ function M.context_query_for(parser, bufnr, requested_lang)
     return query
 end
 
----@param opts { bufnr: integer, lang?: string, parser: vim.treesitter.LanguageTree, context_query: marginalia.ContextQuery?, changedtick: integer, on_publish?: fun(bufnr: integer) }
+---@param entry marginalia.ContextTreeCache
+---@param key any
+---@param callback? fun(bufnr: integer)
+local function subscribe(entry, key, callback)
+    if not callback then
+        return
+    end
+
+    entry.subscribers[key or callback] = callback
+end
+
+---@param opts { bufnr: integer, lang: string, parser: vim.treesitter.LanguageTree, changedtick: integer, subscriber_key?: any, on_publish?: fun(bufnr: integer) }
 ---@return table<integer, TSTree>?
 local function request_parse(opts)
     local key = cache_key(opts.bufnr, opts.lang)
     local previous = cache[key]
-    local generation = (previous and previous.generation or 0) + 1
 
-    if previous and previous.pending_generation and previous.changedtick == opts.changedtick then
+    if
+        previous
+        and previous.parser == opts.parser
+        and previous.pending_generation
+        and previous.changedtick == opts.changedtick
+    then
+        subscribe(previous, opts.subscriber_key, opts.on_publish)
         return nil
     end
 
-    cache[key] = vim.tbl_extend('force', previous or {}, {
+    local generation = (previous and previous.generation or 0) + 1
+    local entry = {
         bufnr = opts.bufnr,
         lang = opts.lang,
         parser = opts.parser,
-        context_query = opts.context_query,
         changedtick = opts.changedtick,
         pending_generation = generation,
         generation = generation,
-    })
+        subscribers = {},
+    }
+
+    if previous and previous.parser == opts.parser then
+        entry.trees = previous.trees
+    end
+
+    subscribe(entry, opts.subscriber_key, opts.on_publish)
+    cache[key] = entry
 
     local ok, immediate = pcall(function()
         return opts.parser:parse(nil, function(err, trees)
@@ -96,40 +171,64 @@ local function request_parse(opts)
                 current.pending_generation = nil
 
                 if err or not trees or not trees[1] then
+                    current.subscribers = {}
                     return
                 end
 
                 if not vim.api.nvim_buf_is_valid(opts.bufnr) or changedtick(opts.bufnr) ~= opts.changedtick then
+                    current.subscribers = {}
                     return
                 end
 
                 current.trees = trees
                 current.changedtick = opts.changedtick
-                current.context_query = opts.context_query
 
-                if opts.on_publish then
-                    opts.on_publish(opts.bufnr)
+                local subscribers = current.subscribers
+                current.subscribers = {}
+
+                for _, callback in pairs(subscribers) do
+                    pcall(callback, opts.bufnr)
                 end
             end)
         end)
     end)
 
     if not ok then
+        entry.pending_generation = nil
+        entry.subscribers = {}
         return nil
     end
 
     if immediate and immediate[1] then
-        local current = cache[key]
-        current.pending_generation = nil
-        current.trees = immediate
-        current.changedtick = opts.changedtick
+        entry.pending_generation = nil
+        entry.trees = immediate
+        entry.changedtick = opts.changedtick
+        entry.subscribers = {}
         return immediate
     end
 
     return nil
 end
 
----@param opts? { bufnr?: integer, winid?: integer, lang?: string }
+---@param opts { bufnr: integer, winid: integer, row: integer, col: integer, parser: vim.treesitter.LanguageTree, trees: table<integer, TSTree>, stale?: boolean }
+---@return { bufnr: integer, winid: integer, row: integer, col: integer, parser: vim.treesitter.LanguageTree, trees: table<integer, TSTree>, context_query: marginalia.ContextQuery?, stale?: boolean }
+local function resolve_snapshot(opts)
+    local language_tree = language_tree_at(opts.parser, opts.row, opts.col)
+    local lang = parser_lang(language_tree, parser_lang(opts.parser, vim.bo[opts.bufnr].filetype))
+
+    return {
+        bufnr = opts.bufnr,
+        winid = opts.winid,
+        row = opts.row,
+        col = opts.col,
+        parser = language_tree,
+        trees = language_trees(language_tree, opts.trees),
+        context_query = M.context_query_for(language_tree, opts.bufnr, lang),
+        stale = opts.stale,
+    }
+end
+
+---@param opts? { bufnr?: integer, winid?: integer, lang?: string, on_publish?: fun(bufnr: integer) }
 ---@return { bufnr: integer, winid: integer, row: integer, col: integer, parser: vim.treesitter.LanguageTree, trees: table<integer, TSTree>, context_query: marginalia.ContextQuery?, stale?: boolean }?, string?
 function M.snapshot(opts)
     opts = opts or {}
@@ -147,21 +246,24 @@ function M.snapshot(opts)
         return nil, 'no_parser'
     end
 
-    local lang = opts.lang
-    local query = M.context_query_for(parser, bufnr, lang)
+    local lang = parser_lang(parser, opts.lang or vim.bo[bufnr].filetype)
+
+    if not lang then
+        return nil, 'no_parser'
+    end
+
     local key = cache_key(bufnr, lang)
     local cached = cache[key]
 
-    if cached and cached.trees and cached.changedtick == tick then
-        return {
+    if cached and cached.parser == parser and cached.trees and cached.changedtick == tick then
+        return resolve_snapshot({
             bufnr = bufnr,
             winid = winid,
             row = row,
             col = col,
             parser = parser,
             trees = cached.trees,
-            context_query = cached.context_query,
-        },
+        }),
             nil
     end
 
@@ -169,35 +271,33 @@ function M.snapshot(opts)
         bufnr = bufnr,
         lang = lang,
         parser = parser,
-        context_query = query,
         changedtick = tick,
+        subscriber_key = winid,
         on_publish = opts.on_publish,
     })
 
     if trees and trees[1] then
-        return {
+        return resolve_snapshot({
             bufnr = bufnr,
             winid = winid,
             row = row,
             col = col,
             parser = parser,
             trees = trees,
-            context_query = query,
-        },
+        }),
             nil
     end
 
-    if cached and cached.trees then
-        return {
+    if cached and cached.parser == parser and cached.trees then
+        return resolve_snapshot({
             bufnr = bufnr,
             winid = winid,
             row = row,
             col = col,
             parser = parser,
             trees = cached.trees,
-            context_query = cached.context_query,
             stale = true,
-        },
+        }),
             nil
     end
 
@@ -205,6 +305,23 @@ function M.snapshot(opts)
 end
 
 M.snapshot_sync = M.snapshot
+
+---@param snapshot { row: integer, col: integer, parser: vim.treesitter.LanguageTree, trees: table<integer, TSTree> }
+---@return TSNode?
+local function node_at_snapshot(snapshot)
+    local range = cursor_range(snapshot.row, snapshot.col)
+
+    if type(snapshot.parser.tree_for_range) == 'function' then
+        local ok, tree = pcall(snapshot.parser.tree_for_range, snapshot.parser, range)
+
+        if ok and tree then
+            return collect.innermost_named_node_at(tree:root(), snapshot.row, snapshot.col)
+        end
+    end
+
+    local tree = snapshot.trees[1]
+    return tree and collect.innermost_named_node_at(tree:root(), snapshot.row, snapshot.col) or nil
+end
 
 ---@param opts? { bufnr?: integer, winid?: integer, lang?: string, on_publish?: fun(bufnr: integer) }
 ---@return marginalia.ContextResult
@@ -215,12 +332,9 @@ function M.for_window(opts)
         return { frames = {}, reason = reason }
     end
 
-    local root = snapshot.trees[1]:root()
-    local node = collect.innermost_named_node_at(root, snapshot.row, snapshot.col)
-
     return {
         frames = collect.ancestors(
-            node,
+            node_at_snapshot(snapshot),
             vim.tbl_deep_extend('force', opts or {}, {
                 bufnr = snapshot.bufnr,
                 context_query = snapshot.context_query,

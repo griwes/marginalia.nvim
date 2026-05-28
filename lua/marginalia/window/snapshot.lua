@@ -12,6 +12,7 @@ local M = {}
 ---@field wrap boolean
 ---@field window_scrolloff integer
 ---@field global_scrolloff integer
+---@field jumplist marginalia.WindowJumplistSnapshot
 
 ---@param winid integer
 ---@return table
@@ -19,6 +20,24 @@ function M.normalized_view(winid)
     vim.fn.line('w0', winid)
     vim.fn.line('.', winid)
     return vim.fn.winsaveview()
+end
+
+---@class marginalia.WindowJumplistSnapshot
+---@field index integer
+---@field length integer
+---@field current? table
+
+---@return marginalia.WindowJumplistSnapshot
+local function jumplist_snapshot()
+    local raw = vim.fn.getjumplist()
+    local items = raw[1] or {}
+    local index = raw[2] or 0
+
+    return {
+        index = index,
+        length = #items,
+        current = items[index],
+    }
 end
 
 ---@param winid integer
@@ -38,6 +57,7 @@ function M.capture(winid)
         wrap = vim.wo[winid].wrap,
         window_scrolloff = vim.wo[winid].scrolloff,
         global_scrolloff = vim.go.scrolloff,
+        jumplist = jumplist_snapshot(),
     }
 end
 

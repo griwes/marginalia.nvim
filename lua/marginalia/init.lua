@@ -8,7 +8,17 @@ local M = {}
 M.config = config.normalize()
 
 local augroup = vim.api.nvim_create_augroup('marginalia', { clear = true })
+
+---@class marginalia.MouseKeymap
+---@field callback fun(): string
+
+---@type table<integer, table<string, marginalia.MouseKeymap>>
 local mouse_keymaps = {}
+
+local mouse_scroll_mappings = {
+    ['<ScrollWheelUp>'] = 'up',
+    ['<ScrollWheelDown>'] = 'down',
+}
 
 ---@param winid integer
 ---@param event? string
@@ -33,42 +43,167 @@ local function mouse_scroll_rows()
     return math.max(0, math.floor(rows))
 end
 
+---@param winid integer
+---@return integer?
+local function native_scroll_delta(winid)
+    local event = vim.v.event
+
+    if type(event) ~= 'table' then
+        return nil
+    end
+
+    local win_event = event[winid] or event[tostring(winid)]
+
+    if type(win_event) ~= 'table' or type(win_event.topline) ~= 'number' or win_event.topline == 0 then
+        return nil
+    end
+
+    return win_event.topline
+end
+
 ---@param bufnr integer
-local function install_mouse_keymaps(bufnr)
-    if not M.config.input.mouse_scroll then
-        if mouse_keymaps[bufnr] then
-            pcall(vim.keymap.del, 'n', '<ScrollWheelUp>', { buffer = bufnr })
-            pcall(vim.keymap.del, 'n', '<ScrollWheelDown>', { buffer = bufnr })
-            mouse_keymaps[bufnr] = nil
+---@param lhs string
+---@return table?
+local function buffer_keymap(bufnr, lhs)
+    if not vim.api.nvim_buf_is_valid(bufnr) then
+        return nil
+    end
+
+    for _, mapping in ipairs(vim.api.nvim_buf_get_keymap(bufnr, 'n')) do
+        if mapping.lhs == lhs then
+            return mapping
+        end
+    end
+
+    return nil
+end
+
+---@param bufnr integer
+---@param lhs string
+local function remove_owned_mouse_keymap(bufnr, lhs)
+    local owned = mouse_keymaps[bufnr] and mouse_keymaps[bufnr][lhs]
+
+    if not owned then
+        return
+    end
+
+    local current = buffer_keymap(bufnr, lhs)
+
+    if current and current.callback == owned.callback then
+        pcall(vim.keymap.del, 'n', lhs, { buffer = bufnr })
+    end
+
+    mouse_keymaps[bufnr][lhs] = nil
+
+    if next(mouse_keymaps[bufnr]) == nil then
+        mouse_keymaps[bufnr] = nil
+    end
+end
+
+---@param bufnr integer
+---@param lhs string
+---@param direction 'up'|'down'
+local function install_mouse_keymap(bufnr, lhs, direction)
+    local owned = mouse_keymaps[bufnr] and mouse_keymaps[bufnr][lhs]
+    local current = buffer_keymap(bufnr, lhs)
+
+    if current and (not owned or current.callback ~= owned.callback) then
+        if owned then
+            mouse_keymaps[bufnr][lhs] = nil
+
+            if next(mouse_keymaps[bufnr]) == nil then
+                mouse_keymaps[bufnr] = nil
+            end
         end
 
         return
     end
 
-    vim.keymap.set('n', '<ScrollWheelUp>', function()
-        M.scroll_mouse('up')
-    end, {
+    if owned and current then
+        return
+    end
+
+    local callback = function()
+        if M.scroll_mouse(direction) then
+            return '<Ignore>'
+        end
+
+        return lhs
+    end
+
+    vim.keymap.set('n', lhs, callback, {
         buffer = bufnr,
+        desc = 'Scroll Marginalia viewport ' .. direction,
+        expr = true,
+        replace_keycodes = true,
         silent = true,
-        desc = 'Scroll Marginalia viewport up',
     })
-    vim.keymap.set('n', '<ScrollWheelDown>', function()
-        M.scroll_mouse('down')
-    end, {
-        buffer = bufnr,
-        silent = true,
-        desc = 'Scroll Marginalia viewport down',
-    })
-    mouse_keymaps[bufnr] = true
+
+    mouse_keymaps[bufnr] = mouse_keymaps[bufnr] or {}
+    mouse_keymaps[bufnr][lhs] = { callback = callback }
+end
+
+local function sync_mouse_keymaps()
+    local desired = {}
+
+    if M.config.input.mouse_scroll then
+        for _, winid in ipairs(vim.api.nvim_list_wins()) do
+            if window.is_attached(winid) then
+                desired[vim.api.nvim_win_get_buf(winid)] = true
+            end
+        end
+    end
+
+    local tracked_buffers = vim.tbl_keys(mouse_keymaps)
+
+    for _, bufnr in ipairs(tracked_buffers) do
+        if not desired[bufnr] then
+            for lhs in pairs(mouse_scroll_mappings) do
+                remove_owned_mouse_keymap(bufnr, lhs)
+            end
+        end
+    end
+
+    for bufnr in pairs(desired) do
+        for lhs, direction in pairs(mouse_scroll_mappings) do
+            install_mouse_keymap(bufnr, lhs, direction)
+        end
+    end
 end
 
 ---@param winid integer
 ---@return boolean
-local function attach_window(winid)
+local function suitable_for_auto_attach(winid)
+    if not vim.api.nvim_win_is_valid(winid) then
+        return false
+    end
+
+    local bufnr = vim.api.nvim_win_get_buf(winid)
+
+    if
+        not vim.api.nvim_buf_is_valid(bufnr)
+        or not vim.api.nvim_buf_is_loaded(bufnr)
+        or not vim.bo[bufnr].buflisted
+        or vim.bo[bufnr].buftype ~= ''
+    then
+        return false
+    end
+
+    return not vim.api.nvim_buf_get_name(bufnr):match('^[%a][%w+.-]*://')
+end
+
+---@param winid integer
+---@param automatic? boolean
+---@return boolean
+local function attach_window(winid, automatic)
+    if automatic and not suitable_for_auto_attach(winid) then
+        return false
+    end
+
     local attached = window.attach(winid, refresh_opts(winid))
 
     if attached then
-        install_mouse_keymaps(vim.api.nvim_win_get_buf(winid))
+        sync_mouse_keymaps()
     end
 
     return attached
@@ -113,14 +248,31 @@ local function refresh_current(args)
 
     local winid = vim.api.nvim_get_current_win()
 
+    if not suitable_for_auto_attach(winid) then
+        if window.is_attached(winid) then
+            window_events.cancel(winid)
+            window.detach(winid)
+            sync_mouse_keymaps()
+        end
+
+        return
+    end
+
     if M.config.auto_attach and not window.is_attached(winid) then
-        attach_window(winid)
+        attach_window(winid, true)
         return
     end
 
     if window.is_attached(winid) then
-        install_mouse_keymaps(vim.api.nvim_win_get_buf(winid))
-        window_events.enqueue(winid, refresh_opts(winid, args and args.event or nil))
+        sync_mouse_keymaps()
+        local event = args and args.event or nil
+        local opts = refresh_opts(winid, event)
+
+        if event == 'WinScrolled' then
+            opts._native_scroll_delta = native_scroll_delta(winid)
+        end
+
+        window_events.enqueue(winid, opts)
     end
 end
 
@@ -136,7 +288,7 @@ local function install_autocmds()
         callback = function()
             if M.config.auto_attach then
                 local winid = vim.api.nvim_get_current_win()
-                attach_window(winid)
+                attach_window(winid, true)
             end
         end,
     })
@@ -163,6 +315,7 @@ local function install_autocmds()
             local winid = tonumber(args.match)
             window_events.cancel(winid)
             window.detach(winid)
+            sync_mouse_keymaps()
         end,
     })
 end
@@ -175,11 +328,20 @@ function M.setup(opts)
     install_commands()
     install_autocmds()
 
-    if M.config.enabled and M.config.auto_attach then
+    if not M.config.enabled then
         for _, winid in ipairs(vim.api.nvim_list_wins()) do
-            attach_window(winid)
+            if window.is_attached(winid) then
+                window_events.cancel(winid)
+                window.detach(winid)
+            end
+        end
+    elseif M.config.auto_attach then
+        for _, winid in ipairs(vim.api.nvim_list_wins()) do
+            attach_window(winid, true)
         end
     end
+
+    sync_mouse_keymaps()
 
     return M.config
 end
@@ -217,12 +379,11 @@ end
 ---@param winid? integer
 ---@return boolean
 function M.enable(winid)
-    winid = winid or vim.api.nvim_get_current_win()
-    local attached = attach_window(winid)
-
-    if attached then
-        install_mouse_keymaps(vim.api.nvim_win_get_buf(winid))
+    if not winid or winid == 0 then
+        winid = vim.api.nvim_get_current_win()
     end
+
+    local attached = attach_window(winid)
 
     return attached
 end
@@ -230,14 +391,29 @@ end
 ---Disable Marginalia in a window.
 ---@param winid? integer
 function M.disable(winid)
+    if not winid or winid == 0 then
+        winid = vim.api.nvim_get_current_win()
+    end
+
+    window_events.cancel(winid)
     window.detach(winid)
+    sync_mouse_keymaps()
 end
 
 ---Toggle Marginalia in a window.
 ---@param winid? integer
 ---@return boolean
 function M.toggle(winid)
-    return window.toggle(winid, M.config)
+    if not winid or winid == 0 then
+        winid = vim.api.nvim_get_current_win()
+    end
+
+    if window.is_attached(winid) then
+        M.disable(winid)
+        return false
+    end
+
+    return M.enable(winid)
 end
 
 ---Refresh Marginalia in a window.
