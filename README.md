@@ -16,6 +16,18 @@ Early development. The current MVP selects Tree-sitter context frames, projects
 visible rows plus conceal ranges, and directly materializes window-scoped
 Neovim `conceal_lines` extmarks for attached windows.
 
+## Requirements
+
+- Neovim 0.11 or newer
+- a Neovim build exposing the experimental `nvim__ns_set()` API for actual
+  window-scoped conceal rendering
+- installed Tree-sitter parsers for the filetypes where Marginalia is enabled
+
+Linux is the primary supported and CI-tested platform. Stable Neovim is tested
+for safe degradation when the experimental API is absent; nightly is tested for
+the rendering path when it exposes that API. Marginalia currently publishes
+from `main` without a stable release tag.
+
 ## Current API
 
 - `require('marginalia').setup(opts)` normalizes plugin configuration.
@@ -44,12 +56,11 @@ in `queries/LICENSE.nvim-treesitter-context` and `queries/README.md`.
 
 ## Installation
 
-Example local `lazy.nvim` spec:
+With `lazy.nvim`:
 
 ```lua
 {
-    dir = vim.fn.expand("~/projects/neovim-plugin-orchestration/marginalia.nvim"),
-    name = 'marginalia.nvim',
+    'griwes/marginalia.nvim',
     opts = {
         context = {
             max_depth = 4,
@@ -71,6 +82,9 @@ Example local `lazy.nvim` spec:
 }
 ```
 
+Run `:checkhealth marginalia` after installation. See `:help marginalia` for
+the lifecycle and command overview.
+
 `enabled` and `auto_attach` are lifecycle-level setup options. Context,
 viewport, and render behavior belongs in the owning `context`, `viewport`, or
 `render` table.
@@ -82,3 +96,8 @@ viewport, and render behavior belongs in the owning `context`, `viewport`, or
 - formatting is enforced with Stylua
 - Lua modules should carry LuaLS annotations and doc comments
 - CI lives in `.github/workflows/ci.yml`
+
+## License
+
+Marginalia is Apache-2.0. The vendored context queries retain their upstream
+MIT license and attribution; see [`queries/README.md`](queries/README.md).

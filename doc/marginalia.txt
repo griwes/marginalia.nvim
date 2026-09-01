@@ -1,0 +1,53 @@
+*marginalia.txt*                   Marginalia context concealment
+
+==============================================================================
+CONTENTS                                                     *marginalia-contents*
+
+1. Introduction ............................................ |marginalia|
+2. Requirements ............................................. |marginalia-requirements|
+3. Setup .................................................... |marginalia-setup|
+4. Commands ................................................. |marginalia-commands|
+5. Health ................................................... |marginalia-health|
+
+==============================================================================
+INTRODUCTION                                                     *marginalia*
+
+Marginalia preserves Tree-sitter context by concealing irrelevant buffer lines
+inside each attached window rather than mirroring context in an overlay.
+
+==============================================================================
+REQUIREMENTS                                        *marginalia-requirements*
+
+Neovim 0.11 or newer and a parser for the active filetype are required. Actual
+window-scoped rendering currently also requires Neovim's experimental
+`nvim__ns_set()` API. Without it Marginalia disables concealment rather than
+leaking namespace state into another window.
+
+==============================================================================
+SETUP                                                   *marginalia-setup*
+
+>lua
+    require('marginalia').setup({
+        context = { max_depth = 4 },
+        viewport = { scope = 'above_cursor' },
+        render = { conceallevel = 2, priority = 200 },
+    })
+<
+
+==============================================================================
+COMMANDS                                             *marginalia-commands*
+
+*:MarginaliaEnable*     Enable the current window.
+*:MarginaliaDisable*    Disable the current window.
+*:MarginaliaToggle*     Toggle the current window.
+*:MarginaliaRefresh*    Recompute the current window.
+*:MarginaliaDebug*      Print the current debug snapshot.
+
+==============================================================================
+HEALTH                                                 *marginalia-health*
+
+Run: >vim
+    :checkhealth marginalia
+<
+
+vim:tw=78:ts=8:noet:ft=help:norl:
