@@ -3,15 +3,19 @@ local render_provider = require('marginalia.render.provider')
 local window_apply = require('marginalia.window.apply')
 
 describe('marginalia.render.provider', function()
+    local supports_scoped_ranges = vim.fn.has('nvim-0.12') == 1
+    local original_decoration_provider
     local original_ns_set
     local original_notify_once
 
     before_each(function()
+        original_decoration_provider = vim.api.nvim_set_decoration_provider
         original_ns_set = vim.api.nvim__ns_set
         original_notify_once = vim.notify_once
     end)
 
     after_each(function()
+        vim.api.nvim_set_decoration_provider = original_decoration_provider
         vim.api.nvim__ns_set = original_ns_set
         vim.notify_once = original_notify_once
     end)
@@ -40,21 +44,25 @@ describe('marginalia.render.provider', function()
         }
     end
 
-    it('installs idempotently without registering a redraw provider', function()
+    it('installs the version-appropriate provider idempotently', function()
         assert.has_no.errors(function()
             render_provider.install()
             render_provider.install()
         end)
     end)
 
-    it('fails closed when per-window namespace scoping is unavailable', function()
+    it('fails closed when per-window conceal APIs are unavailable', function()
         local bufnr = vim.api.nvim_create_buf(false, true)
         local winid = vim.api.nvim_get_current_win()
         local state = state_for(winid, bufnr, 'unsupported')
         local notifications = {}
 
         vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { 'one', 'two', 'three', 'four' })
-        vim.api.nvim__ns_set = nil
+        if supports_scoped_ranges then
+            vim.api.nvim__ns_set = nil
+        else
+            vim.api.nvim_set_decoration_provider = nil
+        end
         vim.notify_once = function(message)
             notifications[#notifications + 1] = message
         end
@@ -72,7 +80,7 @@ describe('marginalia.render.provider', function()
         })
 
         assert.is_false(rendered)
-        assert.are.equal('nvim__ns_set is unavailable; per-window conceal is disabled', reason)
+        assert.are.equal('per-window conceal APIs are unavailable', reason)
         assert.are.same({}, plan.hidden_ranges)
         assert.are.equal(reason, plan.render_error)
         assert.are.same({}, vim.api.nvim_buf_get_extmarks(bufnr, state.ns, 0, -1, {}))
@@ -82,7 +90,7 @@ describe('marginalia.render.provider', function()
         vim.api.nvim_buf_delete(bufnr, { force = true })
     end)
 
-    it('materializes conceal-line extmarks immediately in a window namespace', function()
+    it('tracks conceal ranges using the version-appropriate provider', function()
         local bufnr = vim.api.nvim_create_buf(false, true)
         local winid = vim.api.nvim_get_current_win()
         local state = state_for(winid, bufnr, 'materialize')
@@ -94,11 +102,16 @@ describe('marginalia.render.provider', function()
 
         local marks = vim.api.nvim_buf_get_extmarks(bufnr, state.ns, 0, -1, { details = true })
 
-        assert.are.equal(1, #marks)
-        assert.are.equal('', marks[1][4].conceal_lines)
-        assert.are.equal(1, marks[1][2])
-        assert.are.equal(2, marks[1][4].end_row)
-        assert.are.same({ wins = { winid } }, vim.api.nvim__ns_get(state.ns))
+        if supports_scoped_ranges then
+            assert.are.equal(1, #marks)
+            assert.are.equal('', marks[1][4].conceal_lines)
+            assert.are.equal(1, marks[1][2])
+            assert.are.equal(2, marks[1][4].end_row)
+            assert.are.same({ wins = { winid } }, vim.api.nvim__ns_get(state.ns))
+        else
+            assert.are.same({}, marks)
+            assert.are.equal(render_provider.namespace(), render_provider.namespace(state))
+        end
         assert.are.same({
             { start_row = 2, end_row = 3 },
         }, render_provider.debug_window(state.winid).hidden_ranges)
@@ -127,15 +140,22 @@ describe('marginalia.render.provider', function()
             { start_row = 4, end_row = 4 },
         })
 
-        assert.are.equal(1, #vim.api.nvim_buf_get_extmarks(bufnr, top_state.ns, 0, -1, {}))
-        assert.are.equal(1, #vim.api.nvim_buf_get_extmarks(bufnr, bottom_state.ns, 0, -1, {}))
-        assert.are.same({ wins = { top } }, vim.api.nvim__ns_get(top_state.ns))
-        assert.are.same({ wins = { bottom } }, vim.api.nvim__ns_get(bottom_state.ns))
+        if supports_scoped_ranges then
+            assert.are.equal(1, #vim.api.nvim_buf_get_extmarks(bufnr, top_state.ns, 0, -1, {}))
+            assert.are.equal(1, #vim.api.nvim_buf_get_extmarks(bufnr, bottom_state.ns, 0, -1, {}))
+            assert.are.same({ wins = { top } }, vim.api.nvim__ns_get(top_state.ns))
+            assert.are.same({ wins = { bottom } }, vim.api.nvim__ns_get(bottom_state.ns))
+        else
+            assert.are.same({}, vim.api.nvim_buf_get_extmarks(bufnr, render_provider.namespace(), 0, -1, {}))
+        end
 
         render_provider.clear_window_marks(top_state)
 
         assert.are.same({}, vim.api.nvim_buf_get_extmarks(bufnr, top_state.ns, 0, -1, {}))
-        assert.are.equal(1, #vim.api.nvim_buf_get_extmarks(bufnr, bottom_state.ns, 0, -1, {}))
+
+        if supports_scoped_ranges then
+            assert.are.equal(1, #vim.api.nvim_buf_get_extmarks(bufnr, bottom_state.ns, 0, -1, {}))
+        end
 
         render_provider.clear_window(top_state)
         render_provider.clear_window(bottom_state)

@@ -607,10 +607,11 @@ describe('marginalia.window', function()
         vim.api.nvim_buf_delete(second_bufnr, { force = true })
     end)
 
-    it('leaves window options and view untouched when namespace scoping is unavailable', function()
+    it('leaves window options and view untouched when per-window conceal is unavailable', function()
         local bufnr = line_buffer(40)
         local original_bufnr = vim.api.nvim_get_current_buf()
-        local original_ns_set = vim.api.nvim__ns_set
+        local provider_api = vim.fn.has('nvim-0.12') == 1 and 'nvim__ns_set' or 'nvim_set_decoration_provider'
+        local original_provider_api = vim.api[provider_api]
         local original_notify_once = vim.notify_once
         local original_height = vim.api.nvim_win_get_height(0)
         local plan
@@ -623,7 +624,7 @@ describe('marginalia.window', function()
         vim.fn.winrestview({ topline = 10 })
         local original_topline = vim.fn.line('w0')
 
-        vim.api.nvim__ns_set = nil
+        vim.api[provider_api] = nil
         vim.notify_once = function() end
 
         local ok, err = pcall(function()
@@ -633,7 +634,7 @@ describe('marginalia.window', function()
             }) and window.state().render.plan
         end)
 
-        vim.api.nvim__ns_set = original_ns_set
+        vim.api[provider_api] = original_provider_api
         vim.notify_once = original_notify_once
 
         assert.is_true(ok, err)

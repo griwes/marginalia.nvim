@@ -1,6 +1,7 @@
 local M = {}
 
-local fallback_ns = vim.api.nvim_create_namespace('marginalia.provider.conceal')
+local compatibility_provider = require('marginalia.render.provider.compat')
+local supports_scoped_ranges = vim.fn.has('nvim-0.12') == 1
 
 ---@class marginalia.RenderProviderWindow
 ---@field bufnr integer
@@ -13,7 +14,12 @@ local fallback_ns = vim.api.nvim_create_namespace('marginalia.provider.conceal')
 ---@type table<integer, marginalia.RenderProviderWindow>
 local windows = {}
 
-local unsupported_reason = 'nvim__ns_set is unavailable; per-window conceal is disabled'
+local compatibility = compatibility_provider.new(function(winid)
+    return windows[winid]
+end)
+local fallback_ns = compatibility.namespace()
+
+local unsupported_reason = 'per-window conceal APIs are unavailable'
 
 ---@param winid integer
 ---@return boolean
@@ -39,7 +45,11 @@ end
 
 ---@return boolean, string?
 function M.supported()
-    if type(vim.api.nvim__ns_set) ~= 'function' then
+    if supports_scoped_ranges and type(vim.api.nvim__ns_set) ~= 'function' then
+        return false, unsupported_reason
+    end
+
+    if not supports_scoped_ranges and not compatibility.supported() then
         return false, unsupported_reason
     end
 
@@ -109,6 +119,10 @@ function M.install()
         return false, reason
     end
 
+    if not supports_scoped_ranges then
+        compatibility.install()
+    end
+
     return true, nil
 end
 
@@ -133,14 +147,14 @@ function M.update_window(state, ranges, opts)
 
     opts = opts or {}
 
-    local ns = namespace_for_state(state)
+    local ns = supports_scoped_ranges and namespace_for_state(state) or fallback_ns
     local previous = windows[state.winid]
 
     if previous then
         clear_namespace(previous.bufnr, previous.ns)
     end
 
-    if not scope_namespace(ns, state.winid) then
+    if supports_scoped_ranges and not scope_namespace(ns, state.winid) then
         clear_namespace(state.bufnr, ns)
         windows[state.winid] = nil
         return false, 'invalid_window'
@@ -152,10 +166,14 @@ function M.update_window(state, ranges, opts)
         hidden_ranges = vim.deepcopy(ranges or {}),
         priority = opts.priority or 200,
         checked = {},
-        primed = true,
+        primed = supports_scoped_ranges,
     }
 
-    materialize_all(windows[state.winid])
+    if supports_scoped_ranges then
+        materialize_all(windows[state.winid])
+    elseif opts.prime then
+        compatibility.prime(windows[state.winid])
+    end
 
     if type(vim.api.nvim__redraw) == 'function' then
         vim.api.nvim__redraw({ buf = state.bufnr, valid = false, flush = false })
@@ -169,10 +187,9 @@ end
 ---@param state marginalia.WindowState|table
 ---@param bufnr? integer
 function M.clear_window_marks(state, bufnr)
-    local ns = namespace_for_state(state)
-    clear_namespace(bufnr or state.bufnr, ns)
-
     local entry = windows[state.winid]
+    local ns = entry and entry.ns or namespace_for_state(state)
+    clear_namespace(bufnr or state.bufnr, ns)
 
     if entry then
         entry.checked = {}
@@ -220,6 +237,12 @@ end
 ---@return integer
 function M.namespace(state_or_winid)
     if type(state_or_winid) == 'table' then
+        local entry = windows[state_or_winid.winid]
+
+        if entry then
+            return entry.ns
+        end
+
         return namespace_for_state(state_or_winid)
     end
 
