@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
     lint:
-        runs-on: ubuntu-latest
+        runs-on: ubuntu-26.04
         timeout-minutes: 10
         steps:
             - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -28,7 +28,7 @@ jobs:
 
     test:
         name: test (${{ matrix.neovim }})
-        runs-on: ubuntu-latest
+        runs-on: ubuntu-26.04
         timeout-minutes: 20
         strategy:
             fail-fast: false
