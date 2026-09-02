@@ -1,11 +1,12 @@
 # Marginalia
 
 > [!WARNING]
-> Marginalia currently depends on Neovim's experimental `nvim__ns_set()` API
-> to scope `conceal_lines` extmarks to one window. The API may change or
-> disappear across Neovim versions. When it is unavailable, Marginalia safely
-> disables conceal rendering rather than leaking conceal state into other
-> windows.
+> Marginalia's window-local conceal rendering uses private Neovim interfaces:
+> scoped namespaces through experimental `nvim__ns_set()` where available, and
+> the decoration provider's internal `_on_conceal_line` callback on Neovim
+> 0.11. These interfaces may change across Neovim versions. If neither path is
+> available, Marginalia disables conceal rendering rather than leaking conceal
+> state into other windows.
 
 Context-preserving Neovim editing experiments built around hiding irrelevant
 lines instead of mirroring context into a floating overlay.
@@ -13,20 +14,20 @@ lines instead of mirroring context into a floating overlay.
 ## Status
 
 Early development. The current MVP selects Tree-sitter context frames, projects
-visible rows plus conceal ranges, and directly materializes window-scoped
-Neovim `conceal_lines` extmarks for attached windows.
+visible rows plus conceal ranges, and materializes window-scoped Neovim
+`conceal_lines` extmarks for attached windows. Neovim 0.12 uses scoped
+namespaces; Neovim 0.11 uses a compatibility decoration provider that
+materializes only the ranges requested for the window being drawn.
 
 ## Requirements
 
 - Neovim 0.11 or newer
-- a Neovim build exposing the experimental `nvim__ns_set()` API for actual
-  window-scoped conceal rendering
 - installed Tree-sitter parsers for the filetypes where Marginalia is enabled
 
 Linux is the primary supported and CI-tested platform. Stable Neovim is tested
-for safe degradation when the experimental API is absent; nightly is tested for
-the rendering path when it exposes that API. Marginalia currently publishes
-from `main` without a stable release tag.
+through the Neovim 0.11 compatibility path; nightly is tested through scoped
+namespaces when it exposes `nvim__ns_set()`. Marginalia currently publishes from
+`main` without a stable release tag.
 
 ## Current API
 
@@ -91,11 +92,13 @@ viewport, and render behavior belongs in the owning `context`, `viewport`, or
 
 ## Development
 
-- tests live in `tests/`
-- cursor-row stability is covered by unit tests; protocol/PTY probes are external Ralph verification artifacts unless explicitly adopted later
-- formatting is enforced with Stylua
-- Lua modules should carry LuaLS annotations and doc comments
-- CI lives in `.github/workflows/ci.yml`
+Run `scripts/ci/run.sh` for the repository-local Stylua, test, and clean-install
+smoke checks. GitHub Actions runs the tests and clean-install smoke checks on
+Neovim 0.11.5, stable, and nightly. A separate lint job runs Stylua and
+validates workflow syntax with actionlint; the nightly test also requires the
+experimental scoped namespace API. Tests under `tests/` cover cursor-row
+stability and screen-level window locality; the workflow is
+`.github/workflows/ci.yml`.
 
 ## License
 
