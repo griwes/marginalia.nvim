@@ -92,9 +92,11 @@ viewport, and render behavior belongs in the owning `context`, `viewport`, or
 
 ## Development
 
-Run `scripts/ci/run.sh` for the same Stylua and test gates used by CI. Tests
-under `tests/` cover cursor-row stability and screen-level window locality; the
-GitHub Actions workflow is `.github/workflows/ci.yml`.
+Run `scripts/ci/run.sh` for the repository-local Stylua, test, and clean-install
+smoke checks. GitHub Actions runs them on Neovim 0.11.5, stable, and nightly,
+validates workflow syntax with actionlint, and requires the experimental scoped
+namespace API on nightly. Tests under `tests/` cover cursor-row stability and
+screen-level window locality; the workflow is `.github/workflows/ci.yml`.
 
 ## License
 
