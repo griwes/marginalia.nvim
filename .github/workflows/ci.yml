@@ -36,10 +36,8 @@ jobs:
                 neovim: ['v0.11.5', 'stable', 'nightly']
         steps:
             - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-            - uses: rhysd/action-setup-vim@febef33995d6649302e9d88dda81e071b68f16a7 # v1
-              with:
-                  neovim: true
-                  version: ${{ matrix.neovim }}
+            - name: Install Neovim
+              run: scripts/ci/install-neovim.sh '${{ matrix.neovim }}'
             - name: Run tests
               run: scripts/ci/test.sh
             - name: Run clean-install smoke
